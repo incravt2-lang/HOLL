@@ -98,14 +98,13 @@ def init_cards(db):
             owner = "player:"+slot.rsplit(":",1)[1]
             db.execute("UPDATE OR IGNORE cards SET slot=? WHERE chat=? AND message=?",(owner,chat,msg))
 
-def listing(state,chat,topic):
+def listing(state):
     rows = []
     for r in state["fights"].values():
-        if r.get("chat")!=chat or (r.get("topic") or 0)!=(topic or 0):continue
         if r["round"] or r["mode"]=="vault" or len(r["party"])>=6: continue
         leader = state["heroes"][r["party"][0]]["name"]
         rows.append([btn(f"{title(r)} · {leader} · {len(r['party'])}/6","join:"+r["id"])])
-    return ("Выбери отряд, чтобы вступить." if rows else "Открытых сборов пока нет."),rows
+    return ("Открытые сборы всех групп. Выбери отряд, чтобы вступить." if rows else "Открытых сборов пока нет."),rows
 
 def screen(db,chat,uid,name,topic,text,rows,*,open_here=False):
     slot = "player:"+uid
@@ -177,7 +176,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
             report = report.rsplit("\n",1)[0]
         msg,rows = report,[]
     elif cmd=="teams" and not mine and uid in heroes:
-        msg,rows = listing(state,chat,topic)
+        msg,rows = listing(state)
         rows.append([btn("Обновить список","nav:teams"),btn("Собрать отряд","nav:raid")])
     elif cmd=="current" and not mine:
         msg,rows = "Сейчас ты в лагере.",[]
@@ -195,13 +194,18 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         msg,rows = "Ты вышел из сбора.",[]
     viewing = mine and any(b["callback_data"].split(":")[0] in ACTIONS and mine["id"] in
                            b["callback_data"].split(":")[1:2] for row in rows for b in row)
-    if viewing: watches[uid] = mine["id"]
-    else: watches.pop(uid,None)
+    if viewing:
+        watches[uid] = {"fight":mine["id"],"chat":chat,"topic":topic}
+    else:
+        watch=watches.get(uid)
+        if not isinstance(watch,dict) or (watch["chat"]==chat and (watch.get("topic") or 0)==(topic or 0)):
+            watches.pop(uid,None)
     menu = [btn("☰ Меню","nav:start")]
     if cmd in ("lore","book","help"):
         menu.insert(0,btn("‹ Кодекс","nav:codex"))
     elif cmd in ("raid","vault") and not mine:
         menu.insert(0,btn("‹ Подземелья","nav:dungeons"))
+    if cmd=="raid" and not mine: rows=[[btn("Открытые сборы","nav:teams")]]+rows
     if cmd!="start" and not event_art: rows = rows+[menu]
     result = screen(db,chat,uid,name,topic,msg,rows,open_here=not cb)
     result["cb"] = cb
@@ -224,13 +228,20 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     if changed:
         others = []
         for who in before:
-            if who==uid or watches.get(who)!=battle_id: continue
+            watch=watches.get(who)
+            if isinstance(watch,str):
+                # Alpha 0.1 displayed all party cards in the originating group.
+                watch={"fight":watch,"chat":previous.get("chat",chat),"topic":previous.get("topic",topic)}
+            if who==uid or not watch or watch["fight"]!=battle_id: continue
             if ended:
                 other_text,other_rows = msg,[]
                 watches.pop(who,None)
             else:
                 other_text,other_rows = board(state,fights[battle_id],who)
-            others.append(screen(db,chat,who,heroes[who]["name"],topic,other_text,other_rows+[menu]))
+            other=screen(db,watch["chat"],who,heroes[who]["name"],watch["topic"],other_text,other_rows+[menu],open_here=True)
+            if other["target"]:
+                other["edit_only"]=True
+                others.append(other)
         for out in others:
             out["art"] = fight_picture(current or previous)
         result["others"] = others
@@ -344,15 +355,9 @@ def shared_action(db,state,chat,uid,topic,cmd,cb,m,actor):
                     return card("В городскую книгу внесён "+value+".",[[btn("Продолжить","nav:resume")]])
         return alpha.prompt(db,uid,chat_id,topic,cb,reason)
     mine=next((r for r in state["fights"].values() if uid in r["party"]),None)
-    def local(r):
-        return r["chat"]==chat_id and ("topic" not in r or (r["topic"] or 0)==(topic or 0))
-    if mine and not local(mine):
-        return card("Твой поход продолжается в другом месте: "+mine["place"]+". Вернись к его карточке.",[])
-    op,_,args=cmd.partition(":")
-    target_fight=state["fights"].get(args.split(":")[0]) if op in ACTIONS else None
-    if target_fight and not local(target_fight):
-        return card("Этот поход проходит в другой группе или теме.",[[btn("В меню","nav:start")]])
-    if mine and "topic" not in mine:mine["topic"]=topic
+    if mine and cmd.startswith("new:"):
+        return card("У тебя уже есть поход. Можно открыть его в этой группе.",
+                    [[btn("Открыть поход","nav:current")],[btn("‹ Назад в меню","nav:start")]])
     if cmd=="resume":cmd="current" if mine else "start"
     if cmd.startswith("legacy:"):cmd="start"
     name=registered[0] if registered else actor.get("first_name","Путник")[:32]
@@ -600,7 +605,7 @@ def main():
     with db:
         db.execute("BEGIN IMMEDIATE")
         alpha.load(db)
-    print("Мёртвая мера · Alpha 0.1 · общий мир",flush=True)
+    print(f"Мёртвая мера · {alpha.RELEASE} · общий мир",flush=True)
     next_profile = 0
     username = None
     while True:
