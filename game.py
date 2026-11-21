@@ -615,11 +615,12 @@ def resolve(s,r,viewer=None):
             del s["fights"][r["id"]]
             for member in party:
                 member["returning_from_fight"] = True
-            if "road_level" in r: party[0].pop("coast_trip",None)
+                member.pop("hunting_ground",None)
+                member.pop("coast_trip",None)
             if r.get("legacy_safe"):
                 return reply("Отряд погиб. В этом перенесённом походе потерь нет.\n"+msg)
             lost=" Добыча этого похода потеряна." if r["mode"]!="hunt" else ""
-            return reply("Отряд погиб. Герои возродились в лагере."+lost+"\n"+msg+"\n"+"\n".join(death(h) for h in party))
+            return reply("Отряд погиб. Герои вернулись в Гусзк."+lost+"\n"+msg+"\n"+"\n".join(death(h) for h in party))
     r.update(round=r["round"]+1,moves={},used={},heal_requests={},deadline=time.time()+60,log=msg)
     return board(s,r,viewer)
 
@@ -679,7 +680,7 @@ def inventory(h,uid,slot=None,page=0,needed=None,active=None):
         if h.get("buckles") or h.get("spare_drops"): rows.append([btn("Трофеи походов","spoils")])
         rows.append([btn("Хлам и материалы","materials")])
         stock = [f"{v[0]} ×{h['potions'][k]}" for k,v in POTIONS.items() if h["potions"].get(k)]
-        rows.append([btn("Обмен и подарки","barter"),btn("Скупщик","shop:"+uid+":"+revision(h,active)+":sell")])
+        rows.append([btn("Игроки рядом","nearby"),btn("Скупщик","shop:"+uid+":"+revision(h,active)+":sell")])
         return reply(f"Снаряжение · {h['name']}\nВыбери ячейку, чтобы примерить или снять вещь.\n"
                      f"Хлам {units(h,needed)}/{capacity(h)} · {h['wallet']} мед.\nРасходники: "+(", ".join(stock) or "пусто"),rows)
     worn = h["gear"][slot]
@@ -794,12 +795,12 @@ def play(s,uid,name,cmd):
         if mine and mine["round"]: return reply("Комендант ждёт тебя в городе после боя.")
         return desk(s,uid,p[1:])
     if op in ("town","shop"):
-        if mine and mine["round"]: return reply("Ты в бою. Прилавки откроются после возвращения.")
+        if mine:return board(s,mine,uid)
         if op=="town":
             h.pop("coast_trip",None)
             return market(h,uid,active=city.buff(s),needed=needs(s,uid))
         return trade(h,uid,p,city.buff(s),needs(s,uid))
-    if op=="barter": return exchange(s,uid,cmd)
+    if op in ("barter","nearby"): return exchange(s,uid,cmd)
     if op=="spoils": return spoils(s,uid,p[1:])
     if op=="materials":
         needed=needs(s,uid)
@@ -834,9 +835,19 @@ def play(s,uid,name,cmd):
         return atlas(op,h)
     if op=="band" and len(p)==3 and p[1] in MODES and p[2] in tuple(map(str,range(6))):
         return atlas(p[1],h,int(p[2]))
+    if op=="travel" and len(p)==3 and p[1] in DIGITS and p[2] in ("0","1"):
+        if mine:return board(s,mine,uid)
+        z,half=int(p[1]),int(p[2])
+        h.pop("coast_trip",None)
+        h["hunting_ground"]=area_name(z,half)
+        text,rows=area("hunt",z,h,half)
+        return reply("Ты на месте. "+text,rows+[[btn("Вернуться в Гусзк","nav:town")]])
     if op=="area" and (len(p)==3 or len(p)==4 and p[3] in ("0","1")) and p[1] in MODES and p[2] in DIGITS:
         z=int(p[2])
         text,rows=area(p[1],z,h,int(p[3]) if len(p)==4 else int(p[1]=="vault"))
+        if p[1] in ("zones","hunt") and not mine:
+            half=int(p[3]) if len(p)==4 else 0
+            rows.insert(0,[btn("Отправиться сюда",f"travel:{z}:{half}")])
         return text,rows+[[btn("‹ К локациям",f"band:{p[1]}:{BANDS[z]}")]]
     if op in ("entry","loot") and len(p)==3 and p[1] in DIGITS and p[2] in tuple(map(str,range(16))):
         z,n = map(int,p[1:])
@@ -864,8 +875,8 @@ def play(s,uid,name,cmd):
     if not r["round"]:
         if op=="join" and r["mode"]=="vault": return reply("Этот тайник рассчитан на одного героя.")
         if op=="join" and not mine:
-            h.pop("coast_trip",None)
             if len(r["party"])>=6: return reply("В отряде уже шесть героев.")
+            h.pop("coast_trip",None)
             r["party"].append(uid)
         elif op=="join" and mine is not r: return reply("Ты уже в другом отряде.")
         if op=="leave" and uid in r["party"]:

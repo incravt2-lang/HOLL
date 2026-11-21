@@ -1,5 +1,7 @@
 """Chat-local gifts and trades. Settle both baskets together on acceptance."""
 import secrets
+import time
+from localchat import together,track
 from collections import Counter
 from cargo import needs,free
 from market import capacity,units,material_name
@@ -64,12 +66,25 @@ def settle(s,o):
 
 def exchange(s,uid,cmd):
     heroes=s["heroes"]; h=heroes[uid]; offers=s.setdefault("offers",{})
-    args=cmd.split(":")[1:];home=button("К сделкам","barter")
+    track(s)
+    args=cmd.split(":")[1:];home=button("‹ Игроки рядом","nearby")
     busy={i for r in s["fights"].values() if r["round"] for i in r["party"]}
-    if not args:
+    def visible(i):
+        return together(s,uid,i) and s.get("seen",{}).get(i,0)>time.time()-600
+    if not args or (cmd.startswith("nearby:") and args[0] in ("page","inbox")):
         rows=[button(("Получено · " if o["to"]==uid else "Отправлено · ")+heroes[o["from"] if o["to"]==uid else o["to"]]["name"],"barter:view:"+key) for key,o in offers.items() if uid in (o["from"],o["to"])]
-        rows.extend(button("Предложить · "+p["name"],"barter:to:"+i) for i,p in heroes.items() if i!=uid)
-        return "Обмен и подарки\nВыбери героя или открой предложение.\n"+h.get("trade_news",""),rows
+        people=sorted((i for i in heroes if visible(i)),key=lambda i:(heroes[i]["name"],i))
+        page=int(args[1]) if len(args)==2 and args[1].isascii() and args[1].isdigit() and len(args[1])<8 else 0
+        page=min(page,max(0,(len(people)-1)//8))
+        rows.extend(button(heroes[i]["name"],"nearby:hero:"+i) for i in people[page*8:page*8+8])
+        for n in (page-1,page+1):
+            if 0<=n*8<len(people):rows.append(button(f"Страница {n+1}",f"nearby:page:{n}"))
+        return f"{h['talk_label']}\nИгроки рядом · {len(people)}",rows
+    if len(args)==2 and args[0]=="hero":
+        other=args[1]
+        if not visible(other):return "Героя уже нет рядом.",[home]
+        rows=[] if busy.intersection((uid,other)) else [button("Предложить обмен","barter:to:"+other)]
+        return heroes[other]["name"]+" · "+h["talk_label"]+("\nОбмен доступен после боя." if not rows else ""),rows+[home]
     if len(args)==2 and args[0] in ("view","yes","no"):
         act,key=args;o=offers.get(key)
         if not o or uid not in (o["from"],o["to"]):return "Предложение закрыто.",[home]
@@ -88,15 +103,17 @@ def exchange(s,uid,cmd):
         for who in (o["from"],o["to"]):heroes[who]["trade_news"]=status+"\n"+desc
         return status+"\n"+desc,[home]
     if uid in busy:return "Заверши бой перед сделкой.",[home]
-    if len(args)==2 and args[0]=="to" and args[1] in heroes and args[1]!=uid:
-        d=dict(id=secrets.token_hex(4),to=args[1],give={},want={},side="give")
+    if len(args)==2 and args[0]=="to":
+        if not visible(args[1]) or args[1] in busy:return "Герой недоступен для обмена.",[home]
+        d=dict(id=secrets.token_hex(4),to=args[1],room=h["talk_room"],give={},want={},side="give")
         h["trade_draft"]=d;args=["edit",d["id"]]
     d=h.get("trade_draft")
     if not d or len(args)<2 or args[1]!=d["id"]:return "Черновик устарел.",[home]
     act,key,*params=args;other=d["to"]
+    if not together(s,uid,other,d.get("room")) or other in busy:return "Герой недоступен для обмена.",[home]
     if act=="send":
         if not (d["give"] or d["want"]):return "Выбери содержимое предложения.",[home]
-        offers[key]={k:d[k] for k in ("give","want","to")}
+        offers[key]={k:d[k] for k in ("give","want","to","room") if k in d}
         offers[key]["from"]=uid
         del h["trade_draft"]
         return "Предложение отправлено.\n"+terms(offers[key],heroes),[home]

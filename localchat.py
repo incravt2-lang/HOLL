@@ -12,9 +12,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
-from world import encounter_area
+from world import encounter_area, area_name, ZONES, VAULTS
 
 def init(db):
+    db.execute("CREATE TABLE IF NOT EXISTS chat_seen(uid TEXT PRIMARY KEY, stamp REAL)")
     db.execute("""CREATE TABLE IF NOT EXISTS location_messages(
         id INTEGER PRIMARY KEY, room TEXT NOT NULL, uid TEXT NOT NULL,
         nick TEXT NOT NULL, body TEXT NOT NULL, created REAL NOT NULL, nonce TEXT NOT NULL,
@@ -23,7 +24,7 @@ def init(db):
 
 def track(state):
     """Commit room transitions in the same transaction as the game action."""
-    active={uid:r for r in state.get("fights",{}).values() if r["round"] for uid in r["party"]}
+    active={uid:r for r in state.get("fights",{}).values() for uid in r["party"]}
     now=time.time()
     for uid,h in state["heroes"].items():
         r=active.get(uid)
@@ -31,17 +32,37 @@ def track(state):
         if r and r["mode"]=="hunt" and "road_level" not in r:
             h["hunting_ground"]=encounter_area(r["z"],r["choice"])
         if r and r["mode"] in ("raid","vault"):
-            room="party/"+r["id"]; label="Чат отряда" if r["mode"]=="raid" else "Одиночный тайник"
-            if r["mode"]=="vault":room=""
+            vault=r["mode"]=="vault"
+            h["hunting_ground"]=area_name(r["z"],1 if vault else r["choice"])
+            room=("vault/" if vault else "party/")+r["id"]
+            place=VAULTS[r["z"]][0] if vault else ZONES[r["z"]][2][r["choice"]][0]
+            label=place+(" · сбор" if not r["round"] else f" · зал {r.get('room',0)+1}/3")
         elif trip:
-            camp=trip["step"]==3 and not trip.get("waiting") and not r
-            room,label=("camp","Лагерь «У моря»") if camp else ("","В пути")
+            step=trip["step"]
+            if step==3 and not trip.get("waiting") and not r:room,label="camp","Лагерь «У моря»"
+            else:
+                room=f"road/{step}"
+                label=("За городскими воротами","Верстовой столб","Рыбная дорога","Костры над отмелью")[step]
         elif h.get("hunting_ground"):
             label=h["hunting_ground"];room="hunt/"+label
         else:room,label="town","Торговая площадь Гусзка"
         if h.get("talk_room")!=room:
             h.update(talk_room=room,talk_since=now)
         h["talk_label"]=label
+    fighting={i for i,r in active.items() if r["round"]}
+    for key,o in list(state.get("offers",{}).items()):
+        if fighting.intersection((o["from"],o["to"])) or not together(state,o["from"],o["to"],o.get("room")):
+            del state["offers"][key]
+        else:o["room"]=state["heroes"][o["from"]]["talk_room"]
+    for uid,h in state["heroes"].items():
+        d=h.get("trade_draft")
+        if d and not together(state,uid,d["to"],d.get("room")):h.pop("trade_draft")
+
+def together(state,uid,other,expected=None):
+    h=state["heroes"].get(uid,{})
+    room=h.get("talk_room")
+    return bool(room and uid!=other and room==state["heroes"].get(other,{}).get("talk_room") and expected in (None,room))
+
 
 class ChatError(Exception):
     def __init__(self,status,msg):
@@ -66,6 +87,11 @@ def identity(raw,token):
         raise ChatError(401,"Закрой окно и открой чат из игровой карточки.")
 
 def exchange(db,uid,req,write):
+    now=time.time()
+    touched=db.execute("SELECT stamp FROM chat_seen WHERE uid=?",(uid,)).fetchone()
+    if not touched or now-touched[0]>=60:
+        db.execute("INSERT OR REPLACE INTO chat_seen SELECT uid,? FROM alpha_names WHERE uid=?",(now,uid))
+        db.commit()
     db.execute("BEGIN IMMEDIATE" if write else "BEGIN")
     row=db.execute("SELECT state FROM alpha_world WHERE id=1").fetchone()
     h=json.loads(row[0])["heroes"].get(uid) if row else None

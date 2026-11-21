@@ -84,11 +84,12 @@ def api(method, upload=None, **data):
 MENU = [
     [("Дневник","diary"),("Сумка","bag"),("Гусзк","town")],
     [("Охота","hunt"),("Подземелья","dungeons"),("Отряды","teams")],
-    [("Карта","zones"),("Обмен","barter"),("Кодекс","codex")],
+    [("Карта","zones"),("Игроки рядом","nearby"),("Кодекс","codex")],
 ]
 ACTIONS = {"patha","pathb","pathok","coinok","faceboss","turnback","exitfinish","pits","loft","closevote","join","go","leave","hit","block","skill","finish","heal","healok","ward","fury"} | set(POTIONS)
 
 def init_cards(db):
+    db.execute("CREATE TABLE IF NOT EXISTS trade_screen(uid TEXT PRIMARY KEY, view TEXT NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS cards(chat INTEGER, slot TEXT, message INTEGER, "
                "topic INTEGER, PRIMARY KEY(chat,slot), UNIQUE(chat,message))")
     db.execute("CREATE TABLE IF NOT EXISTS card_media(chat INTEGER,message INTEGER,art TEXT,view TEXT,PRIMARY KEY(chat,message))")
@@ -158,9 +159,9 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         msg = f"{TITLE} · уровень {level(hero)}" if hero else f"{TITLE} · выбери класс в разделе «Дневник»"
         rows = [[btn(label,"nav:"+dest) for label,dest in row] for row in MENU]
         msg += f"\n{alpha.RELEASE} · онлайн за 10 мин: {len(state.get('seen',{}))}"
-        incoming = sum(o["to"]==uid for o in state.get("offers",{}).values())
+
         if hero and hero.get("coast_trip") and not mine: rows.insert(0,[btn("Дорога к морю","road")])
-        if incoming: msg += f"\nПредложений обмена: {incoming}"
+
         if hero and hero.get("last_result"): rows.append([btn("Итоги последнего боя","nav:report")])
         if mine: rows.insert(0,[btn("Вернуться в поход","nav:current")])
     elif cmd=="codex":
@@ -275,6 +276,7 @@ def screen_picture(command, hero):
         return "hero_" + hero["class"] if hero else "teams"
     if op == "report":
         return hero.get("report_art","teams") if hero else "teams"
+    if op=="travel" and len(args)==2:return ("upper_" if args[1]=="1" else "zone_")+args[0]
     if op == "area" and len(args) in (2,3):
         mode, zone = args[:2]
         if mode!="vault" and args[2:]==["1"]: return "upper_"+zone
@@ -327,6 +329,8 @@ def shared_action(db,state,chat,uid,topic,cmd,cb,m,actor):
         return out
     now=time.time()
     seen={i:t for i,t in state.get("seen",{}).items() if t>now-600}
+    for other,stamp in db.execute("SELECT uid,stamp FROM chat_seen WHERE stamp>?",(now-600,)):
+        seen[other]=max(stamp,seen.get(other,0))
     if uid in state["heroes"] or uid in state.get("choices",{}):seen[uid]=now
     state["seen"]=seen
     choices=state.get("choices",{}).get(uid)
@@ -362,7 +366,7 @@ def shared_action(db,state,chat,uid,topic,cmd,cb,m,actor):
     if cmd=="resume":cmd="current" if mine else "start"
     if cmd.startswith("legacy:"):cmd="start"
     name=registered[0] if registered else actor.get("first_name","Путник")[:32]
-    if hero and cmd=="town" and not (mine and mine["round"]):
+    if hero and not mine and (cmd in ("town","orders") or cmd.startswith(("orders:", "shop:"))):
         hero.pop("hunting_ground",None)
         hero.pop("coast_trip",None)
     result=player_action(db,state,chat_id,uid,name,topic,cmd,cb)
@@ -375,6 +379,51 @@ def shared_action(db,state,chat,uid,topic,cmd,cb,m,actor):
         seen[uid]=now
         return alpha.prompt(db,uid,chat_id,topic,cb)
     return result
+
+TRADE_NOTICE="Доступен обмен!"
+
+def recipients(state):
+    return {o["to"] for o in state.get("offers",{}).values()}
+
+def trade_banner(card,enabled):
+    prefix=TRADE_NOTICE+"\n"
+    card["text"]=card["text"].removeprefix(prefix)
+    card["rows"]=[row for row in card["rows"] if not any(b.get("callback_data")=="nearby:inbox" for b in row)]
+    if enabled:
+        card["text"]=prefix+card["text"]
+        card["rows"].insert(0,[btn("Посмотреть обмен","nearby:inbox")])
+        card["page"]=0
+
+def notify_trade(db,result,before,after,state,username):
+    cards=[result,*result.get("others",[])]
+    shown=set()
+    for card in cards:
+        slot=card.get("slot","")
+        if slot.startswith("player:") and not card.get("notice"):
+            who=slot.split(":",1)[1];shown.add(who)
+            trade_banner(card,who in after)
+    for who in (before^after)-shown:
+        row=db.execute("SELECT view FROM trade_screen WHERE uid=?",(who,)).fetchone()
+        if row:
+            card=json.loads(row[0])
+        else:
+            # Existing Alpha cards can receive an invitation before the recipient's first new action.
+            slot="player:"+who
+            old=db.execute("SELECT chat,topic FROM cards WHERE slot=? ORDER BY rowid DESC LIMIT 1",(slot,)).fetchone()
+            if not old:continue
+            h=state["heroes"][who]
+            r=next((r for r in state["fights"].values() if who in r["party"]),None)
+            text,rows=board(state,r,who) if r else (h["talk_label"],[])
+            rows=rows+[[btn("Игроки рядом","nearby"),btn("Меню","nav:start")],
+                       [{"text":"Открыть чат","url":f"https://t.me/{username}?startapp=chat"}]]
+            card=screen(db,old[0],who,h["name"],old[1],text,rows)
+            card["art"]=fight_picture(r) if r else card.get("previous_art") or "gate"
+
+        current=db.execute("SELECT message FROM cards WHERE chat=? AND slot=?",(card["chat"],card["slot"])).fetchone()
+        if not current or current[0]!=card["target"]:continue
+        trade_banner(card,who in after)
+        card["edit_only"]=True
+        result.setdefault("others",[]).append(card)
 
 def process(db, update, username):
     """Commit the game and the pending response together before sending."""
@@ -422,6 +471,7 @@ def process(db, update, username):
                     return dict(chat=chat["id"],cb=cb["id"],notice=True,
                                 text="Открой свою карточку. Если её ещё нет, отправь /start@"+username+".")
             state=alpha.load(db)
+            before_offers=recipients(state)
             if cb and cmd.startswith("page:") and db.execute("SELECT 1 FROM alpha_names WHERE uid=?",(uid,)).fetchone():
                 rec = db.execute("SELECT view FROM card_media WHERE chat=? AND message=?",(chat["id"],m["message_id"])).fetchone()
                 parts = cmd.split(":")
@@ -445,7 +495,12 @@ def process(db, update, username):
                 room=h.get("talk_room")
                 if room and db.execute("SELECT 1 FROM alpha_names WHERE uid=?",(who,)).fetchone():
                     label="Чат отряда" if room.startswith("party/") else "Чат локации"
+                    if cmd.split(":")[0] in ACTIONS|{"start","town","road","current","travel","new"}:
+                        card["text"]+="\n\nМесто · "+h["talk_label"]
+                    if not any(b.get("callback_data") in ("nearby","nav:nearby") for row in card["rows"] for b in row):
+                        card["rows"].append([btn("Игроки рядом","nearby")])
                     card["rows"].append([{"text":label,"url":f"https://t.me/{username}?startapp=chat"}])
+            notify_trade(db,result,before_offers,recipients(state),state,username)
         else:
             return
         db.execute("INSERT INTO pending VALUES (?,?)", (key,json.dumps(result)))
@@ -453,6 +508,7 @@ def process(db, update, username):
 
 def combat_entities(text):
     patterns = (
+        ("bold",r"^Доступен обмен!$"),
         ("bold",r"\[(Оружие|Броня|Аксессуары|Задания и ремёсла|Задания|Записки|Монеты|Трофеи|Хлам)\]"),
         ("bold", r"^(?:[1-4]\. .+|Лавка Мартина|Аптека Лады|Писец Тиш|В бою|Характеристики|Поручения коменданта|Ремесленники лагеря|Материалы|Где искать|Награда|Добыча)$"),
         ("bold", r"^([0-9]+ мед\.)  ·"),
@@ -574,6 +630,10 @@ def remember_card(db,r,message):
         db.execute("DELETE FROM cards WHERE chat=? AND slot=?",(r["chat"],slot))
         slot = "idle:"+str(message)
     db.execute("INSERT OR REPLACE INTO cards VALUES (?,?,?,?)",(r["chat"],slot,message,r["thread"] or 0))
+    if slot.startswith("player:"):
+        view={k:r[k] for k in ("chat","slot","thread","text","rows","art","page") if k in r}
+        view.update(target=message,previous_art=r.get("art"),notice=False)
+        db.execute("INSERT OR REPLACE INTO trade_screen VALUES(?,?)",(slot[7:],json.dumps(view)))
 
 def sync_profile(db,identity):
     settings = {"setMyName":{"name":TITLE},
