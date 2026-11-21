@@ -107,7 +107,7 @@ def victory(s,party,z,n,mode):
             for uid in party:
                 bag=q["cargo"].setdefault(uid,[0,0,0])
                 bag[i]=min(need-q["counts"][i],bag[i]+1)
-            return f"Для коменданта: {label}. Доставьте находку в город."
+            return f"[Задания] Для коменданта: {label}. Доставьте находку в город."
         elif i==1 and not q["counts"][i]:
             if kind=="fires":
                 q["cleared"]=True

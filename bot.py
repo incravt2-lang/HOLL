@@ -248,7 +248,7 @@ def screen_picture(command, hero):
                 return scene
         if action in ("town","armourer","apoth","scribe","sell","bags","keys"):
             return action
-    return {"start":"gate","bag":"bag","slot":"bag","off":"bag","dress":"bag",
+    return {"start":"gate","bag":"bag","materials":"bag","spoils":"bag","slot":"bag","off":"bag","dress":"bag",
             "hunt":"world","zones":"world","raid":"raid","vault":"vault","book":"book",
             "orders":"commandant","town":"town","teams":"teams","current":"teams","leave":"teams",
             "barter":"barter","lore":"lore","help":"help"}.get(op,"gate")
@@ -339,6 +339,7 @@ def process(db, update, username):
 
 def combat_entities(text):
     patterns = (
+        ("bold",r"\[(Оружие|Броня|Аксессуары|Задания и ремёсла|Задания|Записки|Монеты|Трофеи|Хлам)\]"),
         ("bold", r"^(?:[1-4]\. .+|Лавка Мартина|Аптека Лады|Писец Тиш|В бою|Характеристики|Поручения коменданта|Ремесленники лагеря|Материалы|Где искать|Награда|Добыча)$"),
         ("bold", r"^([0-9]+ мед\.)  ·"),
         ("bold", r"^.+ · раунд [0-9]+$"),

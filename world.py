@@ -369,6 +369,12 @@ for band in range(6):
         sources=(0,) if tier==0 else (1,2) if tier==1 else tuple(range(3+(z in VAULTS)))
         for source in sources: SOURCES.setdefault((z,source),[]).append(k)
 
+SEAM_SHIELD = "Щит семи швов"
+SEAM_INDEX = len(NAMES[6])
+NAMES[6].append(SEAM_SHIELD)
+CLASS_PIECES[6,SEAM_INDEX]=(SEAM_SHIELD,LEFT,"guard",1,"Щит","guard")
+ARM_BY_NAME[SEAM_SHIELD]=("guard","Щит")
+
 STAT_NAMES = ("Сила","Ловкость","Выносливость","Воля")
 def legacy_loot_slots(z,n):
     if n in EXTRA_HUNT_IDS: n=0
@@ -398,7 +404,19 @@ RARITY.update({code:piece[3] for code,piece in CLASS_PIECES.items()})
 def loot_slots(z,n,cls=None):
     source=0 if n in HUNT_IDS else n//3
     extra=SOURCES.get((z,source),())
-    return legacy_loot_slots(z,n)+tuple(k for k in extra if cls is None or CLASS_PIECES[z,k][2]==cls)
+    boss_drop=(SEAM_INDEX,) if (z,n)==(6,5) and cls in (None,"guard") else ()
+    return boss_drop+legacy_loot_slots(z,n)+tuple(k for k in extra if cls is None or CLASS_PIECES[z,k][2]==cls)
+
+# Items unique to the upper hunting grounds, second dungeon or vault unlock halfway through a band.
+UPPER_GEAR = set()
+for zone in range(len(ZONES)):
+    early = set(loot_slots(zone,0)) | set(loot_slots(zone,5))
+    late = set(loot_slots(zone,8))
+    if zone in VAULTS: late.update(loot_slots(zone,11))
+    UPPER_GEAR.update((zone,k) for k in late-early)
+
+def wear_level(z,k):
+    return required_level(z) + (5 if (z,k) in UPPER_GEAR else 0)
 
 def tier_name(z,k):
     return TIERS[RARITY[z,k]]
@@ -634,4 +652,15 @@ def worn_bonus(h,item):
 def bonus_label(h,item):
     kind,value=worn_bonus(h,item)
     unit=" п.п." if kind in ("crit","severity") else ""
-    return f"{BONUS_NAMES[kind]} +{value}{unit}"
+    text=f"{BONUS_NAMES[kind]} +{value}{unit}"
+    if item==SEAM_SHIELD: text+=" · после блока следующая Стена щитов даёт +4 защиты, один раз за поход"
+    return text
+
+
+def category(z,k):
+    slot=gear_slot(z,k)
+    if slot==RIGHT: return "Оружие"
+    if slot==LEFT:
+        family=ARM_BY_NAME.get(gear_names(z)[k],(None,None))[1]
+        return "Броня" if family in ("Щит","Баклер") else "Оружие"
+    return "Аксессуары" if slot in (0,3,7,8) else "Броня"

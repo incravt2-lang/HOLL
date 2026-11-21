@@ -3,7 +3,7 @@ import city
 import random
 import time
 
-from world import encounter_area, CLASS_PIECES, HUMAN_IDS, faction, HUNT_IDS, EXTRA_HUNT_IDS, trade_value, LIMITS, RARITY, SCRAPS, ZONES, gear_names, gear_stat, level, monster, rank, strength, tier_name
+from world import category, SEAM_SHIELD, encounter_area, CLASS_PIECES, HUMAN_IDS, faction, HUNT_IDS, EXTRA_HUNT_IDS, trade_value, LIMITS, RARITY, SCRAPS, ZONES, gear_names, gear_stat, level, monster, rank, strength, tier_name
 
 SHIFT = 6 * 3600
 KINDS = {
@@ -81,7 +81,7 @@ def payout(q,h,active=None):
     h["peak"]=max(level(h),h.get("peak",1))
     tier=int(random.randrange(100)<rare)
     names=gear_names(z)
-    pool=[k for k in range(len(names)) if RARITY[z,k]==tier and ((z,k) not in CLASS_PIECES or CLASS_PIECES[z,k][2]==h["class"])]
+    pool=[k for k in range(len(names)) if names[k]!=SEAM_SHIELD and RARITY[z,k]==tier and ((z,k) not in CLASS_PIECES or CLASS_PIECES[z,k][2]==h["class"])]
     k=random.choice([k for k in pool if names[k] not in h["items"]] or pool)
     item=names[k]
     if item in h["items"]:
@@ -90,7 +90,7 @@ def payout(q,h,active=None):
         award=f"{item} уже есть · +{coins} мед."
     else:
         h["items"][item]=[gear_stat(z,k),strength(z,k)]
-        award=tier_name(z,k)+" · "+item
+        award=f"[{category(z,k)}] "+tier_name(z,k)+" · "+item
     return f"Комендант поставил печать. +{xp} опыта · {award}"
 
 def desk(state,uid,args):

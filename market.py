@@ -1,9 +1,10 @@
 """Per-hero economy. Buttons bind purchases to the customer and wallet revision."""
+from cargo import free
 from city import price
 import random
 import time
 from world import trade_value, tier_name,bonus_label,CODE_ITEMS, ITEM_TRAITS, STAT_NAMES, SLOTS, gear_slot, gear_stat
-from world import required_level, level, BANDS, VAULTS, SCRAPS, gear_names, strength
+from world import SEAM_SHIELD, wear_level, level, BANDS, VAULTS, SCRAPS, gear_names, strength
 
 BAGS = ((8,0),(18,40),(36,110),(64,260))
 POTIONS = {"heal":("Малая аптечная мера",6), "fury":("Глоток межевого перца",9), "ward":("Сусло воротного караула",9)}
@@ -31,7 +32,7 @@ CURIOS = ("Амбарная гривна","Серебряная охотничь
 
 def wares(hour,active=None):
     # Keep the usual four listings when the city unlocks the fifth.
-    pool = sorted(CODE_ITEMS)[hour%2::2]
+    pool = sorted(code for code,name in CODE_ITEMS.items() if name!=SEAM_SHIELD)[hour%2::2]
     rng = random.Random(f"guszk-armourer-{hour}")
     stock = rng.sample(pool,4)
     if active=="convoy": stock.append(rng.choice([code for code in pool if code not in stock]))
@@ -47,8 +48,12 @@ def setup(h):
 def capacity(h):
     return BAGS[h["pack"]][0]
 
-def units(h):
-    return sum(h["junk"].values())
+def units(h,needed=None):
+    return sum(free(h,k,needed or {}) for k in h["junk"])
+
+def material_name(key):
+    z,n=map(int,key.split("."))
+    return CURIOS[z] if n==99 else SCRAPS[z][n]
 
 def scrap_value(z,n):
     if (z,n)==(6,98): return 12
@@ -58,11 +63,12 @@ def scrap_value(z,n):
 def key_price(z):
     return 24+12*BANDS[z]
 
-def collect(h,z,n,roll):
+def collect(h,z,n,roll,needed=None):
     if roll>=0.6: return ""
-    if units(h)>=capacity(h): return "сумка полна"
     if roll<0.06: n=99
     key = f"{z}.{n}"
+    needed=needed or {}
+    if h["junk"].get(key,0)>=needed.get(key,0) and units(h,needed)>=capacity(h): return "сумка полна"
     h["junk"][key] = h["junk"].get(key,0)+1
     return CURIOS[z] if n==99 else SCRAPS[z][n]
 
@@ -72,8 +78,8 @@ def purchase(cost,section,active):
 def revision(h,active):
     return str(h["shop_rev"])+(active if active in ("wall","convoy") else "")
 
-def junk_payment(h,active):
-    base=sum(count*scrap_value(*map(int,key.split("."))) for key,count in h["junk"].items())
+def junk_payment(h,active,needed=None):
+    base=sum(free(h,key,needed or {})*scrap_value(*map(int,key.split("."))) for key in h["junk"])
     return scrap_payment(h,base,active)
 
 def scrap_payment(h,base,active):
@@ -81,13 +87,14 @@ def scrap_payment(h,base,active):
     extra,remainder=divmod(base+h.get("sale_tenths",0),10)
     return base+extra,remainder
 
-def market(h,uid,section="town",note="",active=None):
+def market(h,uid,section="town",note="",active=None,needed=None):
+    needed=needed or {}
     def row(label,action):
         return [{"text":label,"callback_data":f"shop:{uid}:{revision(h,active)}:{action}"}]
     shops={"town":"Гусзк","armourer":"Лавка Мартина","apoth":"Аптека Лады","scribe":"Писец Тиш","bags":"Сумочник Уна","keys":"Ключница Рада"}
     text = [shops.get(section,"Скупщик Вей"), f"Кошелёк · {h['wallet']} мед."]
     if section in ("town","bags") or section.startswith("sell"):
-        text[1]+=f"  ·  Хлам {units(h)}/{capacity(h)}"
+        text[1]+=f"  ·  Хлам {units(h,needed)}/{capacity(h)}"
     if active=="wall" and not section.startswith("sell"):
         text.append("Караул на стене · в ценах учтена скидка 5%.")
     if active=="convoy" and section=="armourer":
@@ -113,7 +120,7 @@ def market(h,uid,section="town",note="",active=None):
                 bonus+=f" · {STAT_NAMES[idx]} +{value}"
             bonus+=" · "+bonus_label(h,item)
             price=purchase(asking_price(z,k),section,active)
-            text.append(f"\n{number}. {item}\n{price} мед.  ·  {tier_name(z,k)}  ·  ур. {required_level(z)}\n{SLOTS[gear_slot(z,k)]} · {bonus}")
+            text.append(f"\n{number}. {item}\n{price} мед.  ·  {tier_name(z,k)}  ·  ур. {wear_level(z,k)}\n{SLOTS[gear_slot(z,k)]} · {bonus}")
             if item not in h["items"]:
                 rows.append(row(f"Купить №{number} · {price} мед.",f"stock-{hour}-{code}"))
         rows.append(row("Обновить прилавок","armourer"))
@@ -145,10 +152,14 @@ def market(h,uid,section="town",note="",active=None):
             z,n = map(int,key.split("."))
             price = scrap_value(z,n)
             name = CURIOS[z] if n == 99 else SCRAPS[z][n]
-            text.append(f"{name} ×{count} · по {price} мед.")
+            reserved=min(count,needed.get(key,0))
+            if reserved: text.append(f"[Задания и ремёсла] {name} ×{reserved} · отложено")
+            count-=reserved
+            if not count: continue
+            text.append(f"[Хлам] {name} ×{count} · по {price} мед.")
             total += count*price
         if active=="wall" and total: text.append("Караул на стене · +10% к сумме за хлам.")
-        total,_=junk_payment(h,active)
+        total,_=junk_payment(h,active,needed)
         if total: rows.append(row(f"Продать весь хлам · +{total} мед.","cash"))
         for z in range(len(BANDS)):
             for k,item in enumerate(gear_names(z)):
@@ -161,9 +172,10 @@ def market(h,uid,section="town",note="",active=None):
     if section!="town": rows.append(row("К торговой площади","town"))
     return "\n".join(text),rows
 
-def trade(h,uid,p,active=None):
+def trade(h,uid,p,active=None,needed=None):
+    needed=needed or {}
     def view(section,note=""):
-        return market(h,uid,section,note,active)
+        return market(h,uid,section,note,active,needed)
     if len(p)!=4 or p[1]!=uid: return "Открой город в своей карточке.",[]
     if p[2]!=revision(h,active): return "Цены и запасы на этой карточке устарели. Вернись в город через меню.",[]
     action = p[3]
@@ -183,8 +195,8 @@ def trade(h,uid,p,active=None):
         h["items"][item]=[gear_stat(z,k),strength(z,k)]
         delta,section=-cost,"armourer"
     elif action=="cash":
-        delta,h["sale_tenths"] = junk_payment(h,active)
-        h["junk"].clear()
+        delta,h["sale_tenths"] = junk_payment(h,active,needed)
+        h["junk"]={k:min(v,needed[k]) for k,v in h["junk"].items() if needed.get(k,0)>0}
         section = "sell"
     elif len(key)==3 and key[0]=="gear" and key[1] in map(str,range(len(BANDS))) and key[2] in map(str,range(len(gear_names(int(key[1]))))):
         z,k = map(int,key[1:])

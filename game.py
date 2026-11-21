@@ -1,4 +1,4 @@
-from world import is_humanoid, trade_value
+from world import SEAM_SHIELD, wear_level, is_humanoid, trade_value
 """Rules for one group's campaign. All identifiers in saved JSON are strings."""
 import random
 import city
@@ -9,14 +9,14 @@ CLASSES = {
     "guard": ("Гвардеец Гусзка", "Стена щитов", "защищает отряд"),
     "nun": ("Сестра Ордена Матери", "Полевая перевязка", "лечит отряд"),
     "archer": ("Браконьер", "Меткий выстрел", "наносит усиленный урон"),
-    "smith": ("Мастер Гильдии инженеров", "Раскол брони", "усиливает удары союзников"),
+    "smith": ("Мастер Гильдии инженеров", "Раскол брони", "в этом раунде усиливает свой удар и удары всех атакующих союзников"),
     "witch": ("Ученица аптекаря", "Отравленный клинок", "ослабляет ответный удар и наносит урон"),
 }
 HISTORIES = {
  "guard":"Старая гвардия держала ворота Гусзка, когда из-за стены звали по именам. Из того караула выжили немногие. Жалованье кончилось, совет распущен, и принимать присягу теперь некому. Но стоит гвардейцу откинуть плащ и показать потёртый нагрудный знак, как на ратушной лестнице ему уступают место у огня.",
  "nun":"Когда городские лекари запирали двери перед чужими, сёстры Ордена Матери ставили палатки по обе стороны рва. Под их белым полотнищем раненому давали воду до того, как спрашивали имя. Орден держится этого правила до сих пор. В полевой сумке сестры лежат две одинаковые перевязи: для того, кто нанёс удар, и для того, кто его принял.",
  "archer":"До Плети за силок на городском угодье в Ровне клеймили ладонь. Те немногие браконьеры, что пережили мор, жили вдали от рынка и читали следы лучше писем. Когда лисицы перестали брать выброшенную рыбу, охотники тоже оставили её лежать. Теперь судейский двор пуст, и браконьер впервые входит в Гусзк днём, с луком на виду.",
- "smith":"Когда в осаждённом голодом Гусзке лопнула ось мельницы, мастера Гильдии инженеров подняли жернов воротом из трёх тележных колёс. Позже они укрепляли плотину камнем из разобранного суда. Мастер и в поход берёт мерный клин: по звуку металла он находит слабую заклёпку и показывает товарищам, куда бить.",
+ "smith":"Когда в осаждённом голодом Гусзке лопнула ось мельницы, мастера Гильдии инженеров подняли жернов воротом из трёх тележных колёс. Позже они укрепляли плотину камнем из разобранного суда. Мастер и в поход берёт мерный клин: по звуку металла он находит слабую заклёпку и сам бьёт в раскрывшийся шов и показывает его товарищам.",
  "witch":"В Аптекарском квартале Гусзка ученица должна была приготовить противоядие перед тремя мастерами. До её испытания дожил только один. Город так и не выдал ей свидетельство, зато у её двери выстраиваются носильщики из лазарета. Она знает, какой корень снимает судорогу, а каким достаточно натереть лезвие, чтобы пальцы врага ослабли.",
 }
 BASE_STATS = {"guard":(4,2,5,2),"nun":(2,2,3,6),"archer":(3,6,2,2),
@@ -31,7 +31,7 @@ TALENTS = {
     "witch":("Точный надрез","Знание ядов","Холодный расчёт"),
 }
 ROLE_TEXT = {"guard":"+3 защиты отряду при «Стене щитов»","nun":"+3 здоровья отряду при перевязке",
-             "archer":"+3 урона меткому выстрелу","smith":"+1 урона каждому атакующему союзнику при расколе",
+             "archer":"+3 урона меткому выстрелу","smith":"+1 урона инженеру и каждому атакующему союзнику при расколе",
              "witch":"+2 урона и +1 защиты отравленному клинку"}
 def ranks(h):
     return h.get("ranks",[0,0,0])
@@ -86,6 +86,10 @@ from world import SLOTS, SLOT_ORDER, RINGS, gear_slot, gear_stat, original_count
 from quests import desk, record_win
 from notes import collection, find_note
 from coast import craft, journal, road
+from trophies import spoils
+from cargo import needs
+from world import category
+from market import material_name,revision
 from barter import exchange
 from market import CURIOS, HEALS, REQUIREMENT, SCROLLS, equipment_chance, POTIONS, capacity, units, setup, market, trade, collect, scrap_value, scrap_payment
 
@@ -101,16 +105,19 @@ def reply(text, rows=()):
     return text, list(rows)
 
 def migrate(s):
-    if s.get("version")==9: return
-    if s.get("version") not in (7,8): migrate_names(s)
+    if s.get("version")==10: return
+    if s.get("version") not in (7,8,9): migrate_names(s)
     for hero in s["heroes"].values():
         for name in hero["items"]:
             z,k=map(int,ITEM_CODES[name].split("."))
             hero["items"][name]=[gear_stat(z,k),strength(z,k)]
-        for slot,item in enumerate(hero["gear"]):
-            if item and level(hero) < required_level(int(ITEM_CODES[item].split(".")[0])):
-                hero["gear"][slot]=None
-    s["version"]=9
+        enforce_wear_level(hero)
+    s["version"]=10
+
+def enforce_wear_level(hero):
+    for slot,item in enumerate(hero["gear"]):
+        if item and level(hero)<wear_level(*map(int,ITEM_CODES[item].split("."))):
+            hero["gear"][slot]=None
 
 def migrate_names(s):
     if s.get("version")==6: return
@@ -207,6 +214,7 @@ def death(h):
         del h["items"][lost]
         h["gear"][slot] = None
     h["deaths"] = h.get("deaths",0)+1
+    if level(h)<lv: enforce_wear_level(h)
     change = f" · уровень {lv} → {level(h)}" if level(h)<lv else ""
     return f"{h['name']}: −{loss} опыта{change} · " + (f"утрачено: {lost}" if lost else "снаряжение цело")
 
@@ -306,18 +314,23 @@ def board(s,r,viewer=None):
     for uid,values in r.get("buffs",{}).items():
         for k,end in values.items():
             if end>=r["round"]: effects.append(f"{s['heroes'][uid]['name']} · {POTIONS[k][0]} ({end-r['round']+1})")
+    skill_label="Умение · 4 эн."
     stamina_line = ""
     if viewer in r["party"]:
         cap = energy(s["heroes"][viewer])
-        stamina_line = f" · твоя энергия: {r.get('energy',{}).get(viewer,cap)}/{cap}"
-    active = ("\nНастои: "+", ".join(effects)) if effects else ""
+        skill_label=CLASSES[h["class"]][1]
+        remaining=r.get("ready",{}).get(viewer,0)-r["round"]
+        status=f"с раунда {r['round']+remaining}" if remaining>0 else ("нужно 4 эн." if r.get("energy",{}).get(viewer,cap)<4 else "готово · 4 эн.")
+        stamina_line = f" · твоя энергия: {r.get('energy',{}).get(viewer,cap)}/{cap}\n{skill_label} · {status}"
+    if r.get("bell_raised"): effects.append("Поверенный поднял гирю. Один герой может блоком прикрыть отряд от добавочного урона.")
+    active = ("\nПеред ходом: "+", ".join(effects)) if effects else ""
     divider = "\n\n────────────\n\n"
     ready = sum(uid in r["moves"] for uid in r["party"])
     log = r.get("log") or ""
     return reply(f"{title(r)}{stage} · раунд {r['round']}\n{monster(z,n)} · ур. {r.get('road_level',rank(z,n))} · {r['enemy']} ХП\n"
                  f"{encounter_trait(z,n)[0]} · {encounter_trait(z,n)[1]}\n\nОтряд: {r['hp']}/{r['maxhp']} ХП{stamina_line}{active}"
                  + (divider + log if log else "") + divider + f"Действия сейчас · {ready}/{len(r['party'])} готовы\n{actions_text(s,r)}",
-                 [[btn(t,f"{a}:{suffix}") for t,a in (("Удар","hit"),("Блок","block"),("Умение · 4 эн.","skill"))],
+                 [[btn(t,f"{a}:{suffix}") for t,a in (("Удар","hit"),("Блок","block"),(skill_label,"skill"))],
                   [btn(label,f"{k}:{suffix}") for k,label in (("heal","Лечение"),("fury","Ярость"),("ward","Кожа"))],
                   [btn("Завершить по таймеру",f"finish:{suffix}")]] + supply_rows + confirm)
 
@@ -341,7 +354,7 @@ def resolve(s,r,viewer=None):
     party = [s["heroes"][i] for i in r["party"]]
     dmg = shield = heal = cracks = hits = 0
     rolls = {}
-    split_bonus = {}
+    split_bonus = 0
     poisons = {}
     stamina = r.setdefault("energy",{})
     for i,h in zip(r["party"],party):
@@ -355,6 +368,8 @@ def resolve(s,r,viewer=None):
         if effects.get("iron",0)>=r["round"]: shield += 12+lv
         elif effects.get("ward",0)>=r["round"]: shield += 5+lv//2
         if a=="block":
+            if h["gear"][LEFT]==SEAM_SHIELD and i not in r.get("seam_used",[]):
+                r.setdefault("seam_ready",{})[i]=True
             shield += 6+lv+stats(h)[1]//2+bonus(h,"guard")
             continue
         hits += 1
@@ -365,10 +380,14 @@ def resolve(s,r,viewer=None):
         if a=="skill":
             r["ready"][i] = r["round"]+2
             c = h["class"]
-            if c=="guard": shield += 9+lv+3*mastery+bonus(h,"guard")
+            if c=="guard":
+                shield += 9+lv+3*mastery+bonus(h,"guard")
+                if h["gear"][LEFT]==SEAM_SHIELD and r.get("seam_ready",{}).pop(i,False):
+                    shield+=4
+                    r.setdefault("seam_used",[]).append(i)
             elif c=="nun": heal += 10+lv+3*mastery+bonus(h,"medicine")
             elif c=="archer": base += 7+lv+stats(h)[1]//2+3*mastery
-            elif c=="smith": split_bonus[i] = 3+lv//2+mastery
+            elif c=="smith": split_bonus += 3+lv//2+mastery
             else:
                 shield += 5+lv//2+mastery
                 base += 4+lv//2+2*mastery
@@ -382,13 +401,16 @@ def resolve(s,r,viewer=None):
     details=[]
     for i in r["party"]:
         amount,critical=rolls.get(i,(0,False))
-        if i in rolls: amount+=sum(v for who,v in split_bonus.items() if who!=i)
+        if i in rolls: amount+=split_bonus
         amount+=poisons.get(i,0)
         gap=max(0,enemy_lv-level(s["heroes"][i])-1)
         amount=amount*100//(100+10*gap)
         dmg+=amount
+        if r["moves"].get(i)=="skill" and s["heroes"][i]["class"]=="archer":
+            details.append(f"Меткий выстрел · {s['heroes'][i]['name']} нанёс {amount} урона до поглощения.")
         if critical:
             details.append(f"Критический удар · {s['heroes'][i]['name']}")
+    if split_bonus: details.append(f"Раскол брони · +{split_bonus} к каждому удару до поправки на уровень.")
     absorbed=min(absorb,dmg)
     dmg-=absorbed
     if absorbed: details.append(f"Защита врага поглотила {absorbed}.")
@@ -401,27 +423,39 @@ def resolve(s,r,viewer=None):
         record_win(s,r["party"],z,n,r["mode"])
         city_news = city.victory(s,r["party"],z,n,r["mode"])
         scraps = [city_news] if city_news else []
-        for h in party:
+        for who,h in zip(r["party"],party):
+            needed=needs(s,who)
             if is_humanoid(z,n) and random.random() < COIN_CHANCE:
                 copper = random.randint(1, 3)
                 h["wallet"] += copper
-                scraps.append(f"{h['name']}: +{copper} мед.")
+                scraps.append(f"{h['name']}: [Монеты] +{copper} мед.")
             note=find_note(h,z,n,r["mode"])
-            if note: scraps.append(f"{h['name']}: записка «{note}» · сохранена в Кодексе")
-            piece = collect(h,z,n,random.random())
-            if piece: scraps.append(f"{h['name']}: {piece}")
+            if note: scraps.append(f"{h['name']}: [Записки] «{note}» · сохранена в Кодексе")
+            roll=random.random()
+            material=f"{z}.{99 if roll<0.06 else n}"
+            protected=h["junk"].get(material,0)<needed.get(material,0)
+            piece = collect(h,z,n,roll,needed)
+            if piece:
+                tag="" if piece=="сумка полна" else ("[Задания и ремёсла] " if protected else "[Хлам] ")
+                scraps.append(f"{h['name']}: {tag}{piece}")
             if random.random()<equipment_chance(r["mode"],n):
                 k = roll_equipment(z,n,r["mode"],h["class"])
                 item = gear_names(z)[k]
-                label = tier_name(z,k)+" · "+item
+                label = f"[{category(z,k)}] "+tier_name(z,k)+" · "+item
                 if item not in h["items"]:
                     h["items"][item] = [gear_stat(z,k),strength(z,k)]
                 elif r["mode"]=="hunt":
                     label += " (уже есть)"
                 else:
-                    payment = 4*trade_value(z,k)
-                    h["wallet"] += payment
-                    label += f" (повтор: +{payment} мед.)"
+                    recipients=[i for i in r["party"] if item not in s["heroes"][i]["items"]]
+                    if recipients and r["mode"]=="raid":
+                        ticket=secrets.token_hex(6)
+                        h.setdefault("spare_drops",{})[ticket]=[z,k,recipients]
+                        label+=" · повтор на выбор в сумке → Трофеи походов"
+                    else:
+                        payment = 4*trade_value(z,k)
+                        h["wallet"] += payment
+                        label += f" (повтор: +{payment} мед.)"
                 scraps.append(f"{h['name']}: {label}")
             book = h.setdefault("book",{})
             key = f"{z}.{n}"
@@ -430,6 +464,9 @@ def resolve(s,r,viewer=None):
             del s["fights"][r["id"]]
             lines = [f"Победа · {title(r)}",msg] + scraps
             for h in party:
+                if (r["mode"],z,r["choice"])==("raid",6,0):
+                    h["buckles"]=h.get("buckles",0)+1
+                    lines.append(f"{h['name']}: [Трофеи] пряжка Кожевен · всего {h['buckles']}. Пять принимает мастер у моря.")
                 lv = level(h)
                 base = (16+min(enemy_lv,lv+4)*2)*(1 if r["mode"]=="hunt" else 3)
                 xp = min(LIMITS[-1]-h["xp"],city.earned(max(1,27*base//(10*(1+max(0,lv-enemy_lv-4)))),city.buff(s)))
@@ -439,10 +476,10 @@ def resolve(s,r,viewer=None):
                 lines.append(f"{h['name']}: +{xp} опыта{up}")
             return reply("\n".join(lines),[[btn("Продолжить дорогу","road")]] if "road_level" in r else [])
         if r.get("route")=="pits" and r["room"]==1:
-            for h in party:
-                if units(h)<capacity(h):
+            for who,h in zip(r["party"],party):
+                if units(h,needs(s,who))<capacity(h):
                     h["junk"]["6.98"]=h["junk"].get("6.98",0)+1
-                    scraps.append(h["name"]+": связка выделанных шкур")
+                    scraps.append(h["name"]+": [Хлам] связка выделанных шкур")
                 else:
                     payment,h["sale_tenths"]=scrap_payment(h,12,city.buff(s))
                     h["wallet"]+=payment
@@ -454,6 +491,7 @@ def resolve(s,r,viewer=None):
             r["votes"]={}
         r["room"] += 1
         r["enemy"] = maximum(r)
+        if (r["mode"],z,r["room"])==("vault",8,2): r["bell_raised"]=True
         r["hp"] = min(r["maxhp"],r["hp"]+sum(4+level(h)//2 for h in party))
         msg += " Враг повержен. Отряд перевёл дух."
         if scraps: msg += "\n"+" · ".join(scraps)
@@ -470,6 +508,11 @@ def resolve(s,r,viewer=None):
         if r.get("route")=="pits" and r["room"]==1: raw+=2
         gap=max(0,enemy_lv-sum(level(h) for h in party)//len(party)-1)
         raw=raw*(100+12*gap)//100
+        if r.pop("bell_raised",False):
+            if any(r["moves"].get(i,"block")=="block" for i in r["party"]): msg+=" Удар гири принят на блок."
+            else:
+                raw+=enemy_lv//2
+                msg+=" Гиря ударила с размаху."
         taken = max(0,random.randint(*bounds(raw*len(party)))-shield)
         if r.pop("cut_chain",False):
             taken=0
@@ -534,7 +577,8 @@ def area(mode,z,h,half=0):
         rows = [[btn(f"{v[0]} · ур. {rank(z,3+3*j)}–{rank(z,5+3*j)}",f"new:raid:{z}:{j}")] for j,v in enumerate(raids) if j==half]
     return reply(f"{name} · выбери цель",rows)
 
-def inventory(h,uid,slot=None,page=0):
+def inventory(h,uid,slot=None,page=0,needed=None,active=None):
+    needed=needed or {}
     if slot is None:
         rows = []
         buttons = []
@@ -542,10 +586,12 @@ def inventory(h,uid,slot=None,page=0):
             display = h["gear"][j] or ("двуручное оружие" if j==LEFT and two_handed(h["gear"][RIGHT]) else "—")
             buttons.append(btn(SLOTS[j]+" · "+display,f"slot:{uid}:{j}"))
         rows = [buttons[j:j+2] for j in range(0,len(buttons),2)]
+        if h.get("buckles") or h.get("spare_drops"): rows.append([btn("Трофеи походов","spoils")])
+        rows.append([btn("Хлам и материалы","materials")])
         stock = [f"{v[0]} ×{h['potions'][k]}" for k,v in POTIONS.items() if h["potions"].get(k)]
-        rows.append([btn("Обмен вещами","barter"),btn("Скупщик","shop:"+uid+":"+str(h["shop_rev"])+":sell")])
+        rows.append([btn("Обмен и подарки","barter"),btn("Скупщик","shop:"+uid+":"+revision(h,active)+":sell")])
         return reply(f"Снаряжение · {h['name']}\nВыбери ячейку, чтобы примерить или снять вещь.\n"
-                     f"Хлам {units(h)}/{capacity(h)} · {h['wallet']} мед.\nРасходники: "+(", ".join(stock) or "пусто"),rows)
+                     f"Хлам {units(h,needed)}/{capacity(h)} · {h['wallet']} мед.\nРасходники: "+(", ".join(stock) or "пусто"),rows)
     worn = h["gear"][slot]
     label_worn = worn
     sources = []
@@ -562,7 +608,7 @@ def inventory(h,uid,slot=None,page=0):
             stat = h["items"][item][0]
             power = effective_power(h,item)
             label = f"{item} · +{power} удар" if stat==0 else f"{item} · +{2*power} ХП"
-            label += f" · ур. {required_level(z)}"
+            label += f" · ур. {wear_level(z,k)}"
             if item in ITEM_TRAITS:
                 idx,value=ITEM_TRAITS[item]
                 label += f" · {STAT_NAMES[idx]} +{value}"
@@ -576,9 +622,11 @@ def inventory(h,uid,slot=None,page=0):
                 if item in h["gear"]: label += " · "+SLOTS[h["gear"].index(item)]
                 rows.append([btn(label,f"dress:{uid}:{slot}:{z}:{k}")])
             else: label_worn = label
-    pages=max(1,(len(rows)+11)//12)
+    pages=max(1,(len(rows)+2)//3)
     page=min(page,pages-1)
-    rows=rows[12*page:12*(page+1)]
+    listed=rows[page*3:page*3+3]
+    lines=[f"{3*page+i}. {row[0]['text']}" for i,row in enumerate(listed,1)]
+    rows=[[btn(str(3*page+i),row[0]["callback_data"]) for i,row in enumerate(listed,1)]] if listed else []
     if pages>1:
         rows.append([btn(f"Страница {i+1}/{pages}",f"slot:{uid}:{slot}:{i}") for i in (page-1,page+1) if 0<=i<pages])
     if sources:
@@ -588,7 +636,7 @@ def inventory(h,uid,slot=None,page=0):
         return reply("Обе руки заняты: "+h["gear"][RIGHT],[[btn("Правая рука",f"slot:{uid}:{RIGHT}")],[btn("К ячейкам","nav:bag")]])
     if worn: rows.append([btn("Снять в сумку",f"off:{uid}:{slot}")])
     rows.append([btn("К ячейкам","nav:bag")])
-    return reply(f"{SLOTS[slot]} · "+(label_worn if worn else "пусто"),rows)
+    return reply(f"{SLOTS[slot]} · "+(label_worn if worn else "пусто")+"\n\n"+("\n\n".join(lines) if lines else "В сумке нет других вещей для этой ячейки."),rows)
 
 def play(s,uid,name,cmd):
     migrate(s)
@@ -658,10 +706,22 @@ def play(s,uid,name,cmd):
         if mine and mine["round"]: return reply("Ты в бою. Прилавки откроются после возвращения.")
         if op=="town":
             h.pop("coast_trip",None)
-            return market(h,uid,active=city.buff(s))
-        return trade(h,uid,p,city.buff(s))
+            return market(h,uid,active=city.buff(s),needed=needs(s,uid))
+        return trade(h,uid,p,city.buff(s),needs(s,uid))
     if op=="barter": return exchange(s,uid,cmd)
-    if op=="bag": return inventory(h,uid)
+    if op=="spoils": return spoils(s,uid,p[1:])
+    if op=="materials":
+        needed=needs(s,uid)
+        lines=[]
+        for key,v in h["junk"].items():
+            reserved=min(v,needed.get(key,0))
+            if reserved:lines.append(f"[Задания и ремёсла] {material_name(key)} ×{reserved}")
+            if v>reserved:lines.append(f"[Хлам] {material_name(key)} ×{v-reserved}")
+        project=s.get("city_project",{})
+        for (label,_),v in zip(city.GOALS.get(project.get("kind"),()),project.get("cargo",{}).get(uid,())):
+            if v:lines.append(f"[Задания] {label} ×{v}")
+        return reply("\n".join(lines) or "Материалов пока нет.",[[btn("К сумке","nav:bag")]])
+    if op=="bag": return inventory(h,uid,needed=needs(s,uid),active=city.buff(s))
     if op in ("slot","off","dress") and len(p)>=3 and p[1]==uid and p[2] in tuple(map(str,range(len(SLOTS)))):
         slot = int(p[2])
         if op=="slot": return inventory(h,uid,slot,int(p[3]) if len(p)==4 and p[3].isascii() and p[3].isdigit() and len(p[3])<6 else 0)
@@ -672,7 +732,7 @@ def play(s,uid,name,cmd):
             item = gear_names(z)[k]
             if item not in h["items"] or gear_slot(z,k)!=(7 if slot in RINGS else slot):
                 return reply("Для этой ячейки предмет недоступен.")
-            if level(h)<required_level(z): return reply(f"Нужен уровень {required_level(z)}.")
+            if level(h)<wear_level(z,k): return reply(f"Нужен уровень {wear_level(z,k)}.")
             if slot==LEFT and two_handed(h["gear"][RIGHT]): return reply("Сначала сними двуручное оружие.")
             if two_handed(item) and h["gear"][LEFT]: return reply("Для этого оружия нужны обе руки. Сначала сними предмет с левой руки.")
             if item in h["gear"]: h["gear"][h["gear"].index(item)] = None
@@ -735,7 +795,9 @@ def play(s,uid,name,cmd):
             r.update(round=1,enemy=maximum(r),hp=hp,maxhp=hp,moves={},ready={},deadline=time.time()+60,log="Начало боя.")
         return board(s,r,uid)
     if uid not in r["party"]: return reply("Ты наблюдаешь за этим боем.")
-    if len(p)!=(4 if op=="healok" else 3) or p[2]!=str(r["round"]): return reply("Ход уже прошёл. Открой актуальную карточку.")
+    if len(p)!=(4 if op=="healok" else 3) or p[2]!=str(r["round"]):
+        text,rows=board(s,r,uid)
+        return reply("Раунд сменился. Выбери действие для текущего раунда.\n\n"+text,rows)
     if "votes" in r: return vote_route(s,r,uid,op)
     if op in ROUTES or op=="closevote": return reply("Путь уже выбран.")
     confirmed = op=="healok"
@@ -781,7 +843,7 @@ def play(s,uid,name,cmd):
         return resolve(s,r,uid)
     if op not in ("hit","block","skill"): return reply("Выбери действие на карточке боя.")
     if op=="skill" and r.get("energy",{}).get(uid,energy(h))<4: return reply("Нужно 4 энергии. Удар вернёт 1, блок — 3.")
-    if op=="skill" and r["ready"].get(uid,0)>r["round"]: return reply("Умение восстанавливается.")
+    if op=="skill" and r["ready"].get(uid,0)>r["round"]: return reply(f"Умение будет доступно в раунде {r['ready'][uid]}.")
     r["moves"][uid] = op
     if len(r["moves"])==len(r["party"]): return resolve(s,r,uid)
     return board(s,r,uid)

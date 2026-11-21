@@ -6,7 +6,7 @@ import time
 
 from market import asking_price
 from quests import SHIFT, details, progress
-from world import encounter_area, BANDS, CLASS_PIECES, HUNT_IDS, SCRAPS, SLOTS, ZONES, faction, gear_stat, level, monster, rank, strength, tier_name
+from world import category, SEAM_SHIELD, encounter_area, BANDS, CLASS_PIECES, HUNT_IDS, SCRAPS, SLOTS, ZONES, faction, gear_stat, level, monster, rank, strength, tier_name
 
 MASTERS={"veya":"Шорница Вея","hariton":"Оружейник Харитон"}
 SLOTS_BY_MASTER={"veya":(0,3,5,7,9,10,11,13),"hariton":(1,2,4,6,12,14,15)}
@@ -22,7 +22,7 @@ def row(label,cmd):
 def candidates(h,slot):
     band=(level(h)-1)//10
     return [(z,k) for (z,k),p in CLASS_PIECES.items() if BANDS[z]==band and p[1]==slot
-            and p[2]==h["class"] and p[3] in (0,1)]
+            and p[0]!=SEAM_SHIELD and p[2]==h["class"] and p[3] in (0,1)]
 
 def offer(h,slot):
     lv=level(h)
@@ -78,7 +78,7 @@ def road(h,args):
     if trip.get("waiting"):
         return "Поперёк дороги лежит подвода. Из-под брезента поднимается вооружённый человек. Засада!",[row("Принять бой","roadfight:"+trip["id"]),row("Отступить в Гусзк","nav:town")]
     if trip["step"]==3:
-        return ROAD[2][1]+"\nЛагерь разведчиков «У моря»", [row(name,"craft:"+m) for m,name in MASTERS.items()]+[row("Вернуться в Гусзк","nav:town")]
+        return ROAD[2][1]+"\nЛагерь разведчиков «У моря»", [row(name,"craft:"+m) for m,name in MASTERS.items()]+([row("Мастер · пряжки Кожевен","spoils")] if h.get("buckles") else [])+[row("Вернуться в Гусзк","nav:town")]
     label,text=ROAD[trip["step"]-1] if trip["step"] else ("За городскими воротами","До лагеря разведчиков три перехода.")
     return f"Дорога к морю · {trip['step']}/3\n{label}\n{text}",[row("Идти дальше",f"road:{trip['id']}:{trip['step']}")]
 
@@ -122,7 +122,7 @@ def craft(h,args,active=None):
                         if not h["junk"][key]: del h["junk"][key]
                     h["wallet"]-=fee(order,active);timers[m]=now+900;wait=900
                     del orders[m];order=None
-                    note="Получено: "+tier_name(z,k)+" · "+item
+                    note=f"Получено: [{category(z,k)}] "+tier_name(z,k)+" · "+item
     lines=[MASTERS[m]]
     if note: lines.append(note)
     if wait: lines.append(f"До следующей выдачи: {wait//60}:{wait%60:02d}")
