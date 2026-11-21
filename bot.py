@@ -43,9 +43,10 @@ def packed_art():
 def picture_file(art):
     name=art if art.endswith(".mp4") else art+".jpg"
     local=ART_DIR/name
-    if local.is_file(): return local
     pack=packed_art()
-    return pack/name if pack else local
+    if pack is not None and (pack/name).is_file():
+        return pack/name
+    return local
 
 
 def api(method, upload=None, **data):
@@ -503,6 +504,9 @@ def sync_profile(db,identity):
     return next_check
 
 def main():
+    animations = [scene+".mp4" for scene in sorted(ANIMATED_SCENES)]
+    present = [name for name in animations if picture_file(name).is_file()]
+    print(f"Анимации {len(present)}/{len(animations)} · " + ", ".join(present), flush=True)
     local_db = Path(__file__).with_name("campaign.sqlite3")
     hosted_db = Path("/app/data/campaign.sqlite3")
     database = os.environ.get("CAMPAIGN_DB") or (hosted_db if hosted_db.exists() or
