@@ -1,5 +1,6 @@
 """Group projects live inside the same persisted chat transaction as combat and trade."""
 import time
+import pets
 from world import HUNT_IDS, ZONES, encounter_area, faction, level, monster, rank
 
 DAY = 86400
@@ -66,8 +67,11 @@ def buff(s):
 def price(cost,percent):
     return max(1,cost*(100-percent)//100)
 
-def earned(xp,active):
-    return (xp*108+50)//100 if active=="roads" else xp
+def earned(xp,active,hero=None):
+    percent = 8 if active=="roads" else 0
+    if hero and hero.get("good_sign_until", 0) > time.time():
+        percent += pets.BONUS
+    return (xp*(100+percent)+50)//100
 
 def restore(amount,active):
     return (amount*115+50)//100 if active=="hospital" else amount

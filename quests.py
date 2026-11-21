@@ -76,7 +76,7 @@ def progress(q,h):
 def payout(q,h,active=None):
     z=q["z"]
     _,xp,rare=details(q)
-    xp=min(city.earned(xp,active),LIMITS[-1]-h["xp"])
+    xp=min(city.earned(xp,active,h),LIMITS[-1]-h["xp"])
     h["xp"]+=xp
     h["peak"]=max(level(h),h.get("peak",1))
     tier=int(random.randrange(100)<rare)
@@ -122,7 +122,7 @@ def desk(state,uid,args):
                 q["done"]=True
             if not q["done"]:
                 label,xp,rare=details(q)
-                xp=city.earned(xp,city.buff(state))
+                xp=city.earned(xp,city.buff(state),h)
                 z,n=q["z"],q["n"]
                 site=encounter_area(z,n)
                 if n not in HUNT_IDS: site+=" · "+ZONES[z][2][(n-3)//3][0]

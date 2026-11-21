@@ -1,5 +1,7 @@
 """Telegram transport. Run one polling process per token."""
 import hashlib
+import pets
+import city
 import zipfile
 from functools import lru_cache
 import uuid
@@ -122,7 +124,26 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     previous_drink = previous.get("drank",{}).get(uid)
     old_round = fights.get(battle_id,{}).get("round")
     mine = next((r for r in fights.values() if uid in r["party"]),None)
-    if cmd=="start":
+    hero = heroes.get(uid)
+    event_art = None
+    encounter = pets.arrive(hero) if cmd=="town" and hero and not mine else None
+    if encounter:
+        pet, ticket = encounter
+        label, story = pets.PETS[pet]
+        msg = label + "\n\n" + story
+        rows = [[btn("Погладить", "pet:"+ticket)]]
+        event_art = "pet_"+pet
+    elif op=="pet":
+        if not hero or mine or not pets.stroke(hero, key):
+            return dict(chat=chat, cb=cb, notice=True, text="Эта встреча уже закончилась или сейчас идёт поход.")
+        msg = ("Добрый знак\n\nСквозь тучи пробивается солнце. Вы поднимаете лицо к свету и на миг закрываете глаза. "
+               "Вокруг всё так же скрипят телеги и стучат по камню сапоги, а вы стоите посреди площади и улыбаетесь."
+               "\n\n+5% ко всему получаемому опыту на 10 минут.")
+        if city.buff(state)=="roads":
+            msg += "\nВместе с бонусом города — +13% к опыту."
+        rows = [[btn("В город","nav:town")]]
+        event_art = "blessing_"+hero["class"]
+    elif cmd=="start":
         hero = heroes.get(uid)
         msg = f"{TITLE} · уровень {level(hero)}" if hero else f"{TITLE} · выбери класс в разделе «Дневник»"
         rows = [[btn(label,"nav:"+dest) for label,dest in row] for row in MENU]
@@ -170,10 +191,12 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         menu.insert(0,btn("‹ Кодекс","nav:codex"))
     elif cmd in ("raid","vault") and not mine:
         menu.insert(0,btn("‹ Подземелья","nav:dungeons"))
-    if cmd!="start": rows = rows+[menu]
+    if cmd!="start" and not event_art: rows = rows+[menu]
     result = screen(db,chat,uid,name,topic,msg,rows,open_here=not cb)
     result["cb"] = cb
-    if ended and old_round:
+    if event_art:
+        result["art"] = event_art
+    elif ended and old_round:
         result["art"] = fight_picture(previous)
         for who in before:
             heroes[who]["report_art"] = result["art"]

@@ -37,6 +37,13 @@ def offer(h,slot):
 def fee(o,active):
     return city.price(o["price"],10) if active=="fires" else o["price"]
 
+def source_line(z,n):
+    where=encounter_area(z,n)
+    if n not in HUNT_IDS:
+        dungeon,room=divmod(n-3,3)
+        where+=f" · {ZONES[z][2][dungeon][0]} · зал {room+1}/3"
+    return f"{monster(z,n)}, ур. {rank(z,n)} · {where}"
+
 def describe(h,o,active=None):
     lines=[f"Изделие: {SLOTS[o['slot']]} · для твоего класса и уровня при выдаче.",
            f"Работа: {fee(o,active)} мед. · при себе {h['wallet']}"]
@@ -44,7 +51,7 @@ def describe(h,o,active=None):
     lines.append("\nМатериалы")
     for key,qty in o["materials"].items():
         z,n=map(int,key.split("."))
-        lines.append(f"{SCRAPS[z][n]} · {h['junk'].get(key,0)}/{qty}\n   {monster(z,n)}, ур. {rank(z,n)} · {encounter_area(z,n)}")
+        lines.append(f"{SCRAPS[z][n]} · {h['junk'].get(key,0)}/{qty}\n   {source_line(z,n)}")
     return "\n".join(lines)
 
 def journal(s,uid):
@@ -56,8 +63,10 @@ def journal(s,uid):
         for q in b["jobs"]:
             if q["owner"]==uid and not q["done"]:
                 label,xp,rare=details(q)
-                xp=city.earned(xp,active)
-                lines.append(f"{label} · {progress(q,h)}/{q['need']}\nНаграда: {xp} опыта и вещь · редкая {rare}%, иначе обычная.")
+                xp=city.earned(xp,active,h)
+                if len(lines)>1: lines.append("")
+                source=source_line(q["z"],q["n"])
+                lines.append(f"{label} · {progress(q,h)}/{q['need']}\n   {source}\nНаграда: {xp} опыта и вещь · редкая {rare}%, иначе обычная.")
     if len(lines)==1: lines.append("Действующих поручений нет.")
     q=city.current(s)
     lines.append("\nОбщее дело Гусзка\n"+city.PROJECTS[q["kind"]][0]+"\n"+city.summary(q))

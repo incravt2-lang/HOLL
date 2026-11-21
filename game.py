@@ -462,6 +462,8 @@ def resolve(s,r,viewer=None):
             book[key] = book.get(key,0)+1
         if r["mode"]=="hunt" or r["room"]==2:
             del s["fights"][r["id"]]
+            for member in party:
+                member["returning_from_fight"] = True
             lines = [f"Победа · {title(r)}",msg] + scraps
             for h in party:
                 if (r["mode"],z,r["choice"])==("raid",6,0):
@@ -469,7 +471,7 @@ def resolve(s,r,viewer=None):
                     lines.append(f"{h['name']}: [Трофеи] пряжка Кожевен · всего {h['buckles']}. Пять принимает мастер у моря.")
                 lv = level(h)
                 base = (16+min(enemy_lv,lv+4)*2)*(1 if r["mode"]=="hunt" else 3)
-                xp = min(LIMITS[-1]-h["xp"],city.earned(max(1,27*base//(10*(1+max(0,lv-enemy_lv-4)))),city.buff(s)))
+                xp = min(LIMITS[-1]-h["xp"],city.earned(max(1,27*base//(10*(1+max(0,lv-enemy_lv-4)))),city.buff(s),h))
                 h["xp"] += xp
                 h["peak"] = max(level(h),h.get("peak",1))
                 up = f" · уровень {level(h)}!" if level(h)>lv else ""
@@ -526,6 +528,8 @@ def resolve(s,r,viewer=None):
         msg += f" Ответный удар — {taken}."
         if r["hp"]<=0:
             del s["fights"][r["id"]]
+            for member in party:
+                member["returning_from_fight"] = True
             if "road_level" in r: party[0].pop("coast_trip",None)
             if r.get("legacy_safe"):
                 return reply("Отряд погиб. В этом перенесённом походе потерь нет.\n"+msg)
