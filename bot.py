@@ -1,6 +1,7 @@
 """Telegram transport. Run one polling process per token."""
 import hashlib
 import alpha
+import localchat
 import pets
 import forks
 import city
@@ -361,6 +362,9 @@ def shared_action(db,state,chat,uid,topic,cmd,cb,m,actor):
     if cmd=="resume":cmd="current" if mine else "start"
     if cmd.startswith("legacy:"):cmd="start"
     name=registered[0] if registered else actor.get("first_name","Путник")[:32]
+    if hero and cmd=="town" and not (mine and mine["round"]):
+        hero.pop("hunting_ground",None)
+        hero.pop("coast_trip",None)
     result=player_action(db,state,chat_id,uid,name,topic,cmd,cb)
     for r in state["fights"].values():
         if "chat" not in r:
@@ -433,6 +437,15 @@ def process(db, update, username):
                 for other in result.get("others",[]):
                     other["edit_only"]=True
             alpha.save(db,state)
+            for card in [result,*result.get("others",[])]:
+                slot=card.get("slot","")
+                if not slot.startswith("player:") or card.get("notice"):continue
+                who=slot.split(":",1)[1]
+                h=state["heroes"].get(who,{})
+                room=h.get("talk_room")
+                if room and db.execute("SELECT 1 FROM alpha_names WHERE uid=?",(who,)).fetchone():
+                    label="Чат отряда" if room.startswith("party/") else "Чат локации"
+                    card["rows"].append([{"text":label,"url":f"https://t.me/{username}?startapp=chat"}])
         else:
             return
         db.execute("INSERT INTO pending VALUES (?,?)", (key,json.dumps(result)))
@@ -604,7 +617,8 @@ def main():
     db.execute("CREATE TABLE IF NOT EXISTS profile_state(key TEXT PRIMARY KEY,applied TEXT,retry REAL)")
     with db:
         db.execute("BEGIN IMMEDIATE")
-        alpha.load(db)
+        alpha.save(db,alpha.load(db))
+    localchat.serve(database,TOKEN)
     print(f"Мёртвая мера · {alpha.RELEASE} · общий мир",flush=True)
     next_profile = 0
     username = None

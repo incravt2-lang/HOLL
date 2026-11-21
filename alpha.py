@@ -8,18 +8,21 @@ from copy import deepcopy
 import forks
 import game
 import haul
+import localchat
 from quests import SHIFT
 
-RELEASE = "Alpha 0.1.1"
+RELEASE = "Alpha 0.1.2"
 NAME = re.compile(r"[A-Z][a-z]{2,17}")
 RULE = "Имя героя · 3–18 английских букв. Первая заглавная, остальные строчные. Например, Aldric."
 
 def init(db):
+    localchat.init(db)
     db.execute("CREATE TABLE IF NOT EXISTS alpha_world(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS alpha_prompt(uid TEXT PRIMARY KEY, chat INTEGER, topic INTEGER, ticket TEXT, message INTEGER)")
     db.execute("CREATE TABLE IF NOT EXISTS alpha_names(uid TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE)")
 
 def save(db,s):
+    localchat.track(s)
     db.execute("INSERT OR REPLACE INTO alpha_world VALUES(1,?)",(json.dumps(s,ensure_ascii=False),))
 
 def load(db):
