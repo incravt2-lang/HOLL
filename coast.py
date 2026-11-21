@@ -5,7 +5,7 @@ import time
 
 from market import asking_price
 from quests import SHIFT, details, progress
-from world import BANDS, CLASS_PIECES, HUNT_IDS, SCRAPS, SLOTS, ZONES, faction, gear_stat, level, monster, rank, strength, tier_name
+from world import encounter_area, BANDS, CLASS_PIECES, HUNT_IDS, SCRAPS, SLOTS, ZONES, faction, gear_stat, level, monster, rank, strength, tier_name
 
 MASTERS={"veya":"Шорница Вея","hariton":"Оружейник Харитон"}
 SLOTS_BY_MASTER={"veya":(0,3,5,7,9,10,11,13),"hariton":(1,2,4,6,12,14,15)}
@@ -38,7 +38,7 @@ def describe(h,o):
            f"Работа: {o['price']} мед. · при себе {h['wallet']}"]
     for key,qty in o["materials"].items():
         z,n=map(int,key.split("."))
-        lines.append(f"{SCRAPS[z][n]} · {h['junk'].get(key,0)}/{qty} — {monster(z,n)}, ур. {rank(z,n)} · {ZONES[z][0]}")
+        lines.append(f"{SCRAPS[z][n]} · {h['junk'].get(key,0)}/{qty} — {monster(z,n)}, ур. {rank(z,n)} · {encounter_area(z,n)}")
     return "\n".join(lines)
 
 def journal(s,uid):

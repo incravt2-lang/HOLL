@@ -79,7 +79,7 @@ def attack(h):
     return 5+level(h)+item_bonus(h,0)+stats(h)[0]//2+bonus(h,"strike")
 
 from world import LIMITS, level, required_level
-from world import encounter_trait, faction, HUNT_IDS, EXTRA_HUNT_IDS, ZONES, TRAITS, BANDS, VAULTS, SCRAPS, gear_names, monster, rank, strength
+from world import area_name, encounter_area, encounter_trait, faction, HUNT_IDS, EXTRA_HUNT_IDS, ZONES, TRAITS, BANDS, VAULTS, SCRAPS, gear_names, monster, rank, strength
 from world import LEFT, RIGHT, two_handed, ARM_BY_NAME, ARMS, arm_start
 from world import SLOTS, SLOT_ORDER, RINGS, gear_slot, gear_stat, original_count
 from quests import desk, record_win
@@ -475,35 +475,39 @@ def resolve(s,r,viewer=None):
 
 def atlas(mode,h):
     rows = []
-    for z,zone in sorted(enumerate(ZONES),key=lambda pair:BANDS[pair[0]]):
-        if mode=="vault" and z not in VAULTS: continue
-        low = 1+10*BANDS[z]
-        mark = " ◆" if low<=level(h)<=low+9 else ""
-        rows.append([btn(f"{zone[0]} · {low}–{low+9}{mark}",f"area:{mode}:{z}")])
+    for z,half in sorted(((z,i) for z in range(len(ZONES)) for i in (0,1)),key=lambda v:(BANDS[v[0]],v[1],v[0])):
+        if mode=="vault" and (z not in VAULTS or not half): continue
+        low=required_level(z)+5*half
+        mark=" ◆" if low<=level(h)<=low+4 else ""
+        rows.append([btn(f"{area_name(z,half)} · {low}–{low+4}{mark}",f"area:{mode}:{z}:{half}")])
     return reply("Выбери зону. ◆ — рекомендована для твоего уровня.",rows)
 
-def area(mode,z,h):
+def area(mode,z,h,half=0):
     name, beasts, raids, items = ZONES[z]
+    name=area_name(z,half)
+    low=required_level(z)+5*half
+    hunts=[n for n in HUNT_IDS if low<=rank(z,n)<=low+4]
     if mode=="book":
         rows = []
         total = 0
         count = 12 if z in VAULTS else 9
         for n in (*range(count),*EXTRA_HUNT_IDS):
+            if not low<=rank(z,n)<=low+4: continue
             kills = h.get("book",{}).get(f"{z}.{n}",0)
             total += bool(kills)
             rows.append([btn(f"{monster(z,n)} · {kills} побед",f"entry:{z}:{n}")])
-        return reply(f"Бестиарий · {h['name']} · {name} · побеждено видов {total}/{count+len(EXTRA_HUNT_IDS)}",rows)
+        return reply(f"Бестиарий · {h['name']} · {name} · побеждено видов {total}/{len(rows)}",rows)
     if mode=="vault":
         if z not in VAULTS: return reply("Выбери тайник в разделе «Тайники».")
         return reply(f"{VAULTS[z][0]} · ур. {rank(z,9)}–{rank(z,11)}\nКлючей: {h['keys'].get(str(z),0)} · ключи продаются в городе\nСнаряжение за босса: 50%. Возможные находки: "+", ".join(gear_names(z)[k] for k in loot_slots(z,11,h["class"])),
                      [[btn("Подготовиться ко входу",f"new:vault:{z}:0")]])
     if mode=="zones":
-        return reply(f"{name} · уровни {10*BANDS[z]+1}–{10*BANDS[z]+10}\n{ZONE_NOTES[z]}\nОхота: {', '.join(monster(z,n) for n in HUNT_IDS)}\nПодземелья: {raids[0][0]}, {raids[1][0]}",
-                     [[btn("Охота",f"area:hunt:{z}"),btn("Подземелья",f"area:raid:{z}")]]+([[btn(VAULTS[z][0],f"area:vault:{z}")]] if z in VAULTS else []))
+        return reply(f"{name} · уровни {low}–{low+4}\n{ZONE_NOTES[z]}\nОхота: {', '.join(monster(z,n) for n in hunts)}\nПодземелье: {raids[half][0]}",
+                     [[btn("Охота",f"area:hunt:{z}:{half}"),btn("Подземелья",f"area:raid:{z}:{half}")]]+([[btn(VAULTS[z][0],f"area:vault:{z}:1")]] if z in VAULTS and half else []))
     if mode=="hunt":
-        rows = [[btn(f"{monster(z,j)} · ур. {rank(z,j)}",f"new:hunt:{z}:{j}")] for j in sorted(HUNT_IDS,key=lambda n:rank(z,n))]
+        rows = [[btn(f"{monster(z,j)} · ур. {rank(z,j)}",f"new:hunt:{z}:{j}")] for j in sorted(hunts,key=lambda n:rank(z,n))]
     else:
-        rows = [[btn(f"{v[0]} · ур. {rank(z,3+3*j)}–{rank(z,5+3*j)}",f"new:raid:{z}:{j}")] for j,v in enumerate(raids)]
+        rows = [[btn(f"{v[0]} · ур. {rank(z,3+3*j)}–{rank(z,5+3*j)}",f"new:raid:{z}:{j}")] for j,v in enumerate(raids) if j==half]
     return reply(f"{name} · выбери цель",rows)
 
 def inventory(h,uid,slot=None,page=0):
@@ -651,8 +655,8 @@ def play(s,uid,name,cmd):
     if op in MODES:
         if mine and op in ("hunt","raid","vault"): return board(s,mine,uid)
         return atlas(op,h)
-    if op=="area" and len(p)==3 and p[1] in MODES and p[2] in DIGITS:
-        return area(p[1],int(p[2]),h)
+    if op=="area" and (len(p)==3 or len(p)==4 and p[3] in ("0","1")) and p[1] in MODES and p[2] in DIGITS:
+        return area(p[1],int(p[2]),h,int(p[3]) if len(p)==4 else int(p[1]=="vault"))
     if op=="entry" and len(p)==3 and p[1] in DIGITS and p[2] in tuple(map(str,range(16))):
         z,n = map(int,p[1:])
         zone = ZONES[z]
@@ -660,9 +664,9 @@ def play(s,uid,name,cmd):
         mode = "hunt" if n in HUNT_IDS else "vault" if n>=9 else "raid"
         origin = VAULTS[z][0] if mode=="vault" else "Охота" if mode=="hunt" else zone[2][(n-3)//3][0]
         loot = loot_description(z,n,mode,h["class"])
-        return reply(f"{monster(z,n)} · ур. {rank(z,n)}\n{zone[0]} · {origin}\n{encounter_trait(z,n)[0]}: {encounter_trait(z,n)[1]}\n"
+        return reply(f"{monster(z,n)} · ур. {rank(z,n)}\n{encounter_area(z,n)} · {origin}\n{encounter_trait(z,n)[0]}: {encounter_trait(z,n)[1]}\n"
                      f"Победы: {h.get('book',{}).get(f'{z}.{n}',0)}\n" +
-                     f"Хлам: {SCRAPS[z][n]} · {scrap_value(z,n)} мед.\nРедкость: {CURIOS[z]} · 6%\n" + ("За охоту" if mode=="hunt" else f"Зал {n%3+1}") + f" · шанс снаряжения {equipment_chance(mode,n):.0%}\n"+loot,[[btn("Назад",f"area:book:{z}")]])
+                     f"Хлам: {SCRAPS[z][n]} · {scrap_value(z,n)} мед.\nРедкость: {CURIOS[z]} · 6%\n" + ("За охоту" if mode=="hunt" else f"Зал {n%3+1}") + f" · шанс снаряжения {equipment_chance(mode,n):.0%}\n"+loot,[[btn("Назад",f"area:book:{z}:{int((rank(z,n)-1)%10>=5)}")]])
     if op=="new" and len(p)==4 and p[1] in ("hunt","raid","vault") and p[2] in DIGITS:
         if mine: return board(s,mine,uid)
         mode = p[1]

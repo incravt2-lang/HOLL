@@ -156,6 +156,16 @@ def base_strength(z,k):
     return 2*BANDS[z]+(7 if k>=6 else 1+k//2)
 
 BANDS = (0,1,2,3,4,5,0,2,5)
+UPPER_AREAS = ("Заливные покосы","Дорога соляных обозов","Чёрные запруды",
+               "Пепельные угодья","Сухие верфи","Берег последнего лова",
+               "Заброшенные суконные дворы","Вдовьи соляные колодцы","Архив списанных мер")
+
+def area_name(z,half):
+    return UPPER_AREAS[z] if half else ZONES[z][0]
+
+def encounter_area(z,n):
+    return area_name(z,(rank(z,n)-1)%10>=5)
+
 # Zone id -> vault name, inhabitants and exclusive equipment.
 VAULTS = {6: ('Подпол запечатанного улья',
      ('Личинка кладового воска', 'Девятилапый сторож', 'Хозяйка воскового погреба'),

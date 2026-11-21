@@ -2,7 +2,7 @@
 import random
 import time
 
-from world import CLASS_PIECES, HUMAN_IDS, faction, HUNT_IDS, EXTRA_HUNT_IDS, trade_value, LIMITS, RARITY, SCRAPS, ZONES, gear_names, gear_stat, level, monster, rank, strength, tier_name
+from world import encounter_area, CLASS_PIECES, HUMAN_IDS, faction, HUNT_IDS, EXTRA_HUNT_IDS, trade_value, LIMITS, RARITY, SCRAPS, ZONES, gear_names, gear_stat, level, monster, rank, strength, tier_name
 
 SHIFT = 6 * 3600
 KINDS = {
@@ -122,7 +122,7 @@ def desk(state,uid,args):
             if not q["done"]:
                 label,xp,rare=details(q)
                 z,n=q["z"],q["n"]
-                site=ZONES[z][0]
+                site=encounter_area(z,n)
                 if n not in HUNT_IDS: site+=" · "+ZONES[z][2][(n-3)//3][0]
                 orders={"robber":"Обозчики опознали налётчиков. Возврати дорогу подводам.",
                         "oath":"Старый караульный список сходится. Беглец снова берёт пошлину оружием.",

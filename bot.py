@@ -1,5 +1,7 @@
 """Telegram transport. Run one polling process per token."""
 import hashlib
+import zipfile
+from functools import lru_cache
 import uuid
 import getpass
 import json
@@ -29,6 +31,19 @@ class ApiError(Exception):
 
 ART_DIR = Path(__file__).with_name("art")
 FILE_IDS = {}
+
+@lru_cache(maxsize=1)
+def packed_art():
+    archive=Path(__file__).with_name("hunt-art.zip")
+    return zipfile.Path(archive) if archive.is_file() else None
+
+def picture_file(art):
+    name=art+".jpg"
+    local=ART_DIR/name
+    if local.is_file(): return local
+    pack=packed_art()
+    return pack/name if pack else local
+
 
 def api(method, upload=None, **data):
     if upload is None:
@@ -210,8 +225,9 @@ def screen_picture(command, hero):
         return "hero_" + hero["class"] if hero else "teams"
     if op == "report":
         return hero.get("report_art","teams") if hero else "teams"
-    if op == "area" and len(args)==2:
-        mode, zone = args
+    if op == "area" and len(args) in (2,3):
+        mode, zone = args[:2]
+        if mode!="vault" and args[2:]==["1"]: return "upper_"+zone
         return ("vault_" if mode=="vault" else "zone_") + zone
     if op == "entry" and len(args)==2 and args[1].isdigit():
         zone, index = args[0], int(args[1])
@@ -236,7 +252,7 @@ def screen_picture(command, hero):
 def hunt_picture(fight):
     # A migrated pre-zone hunt may reference a dungeon inhabitant.
     idx = fight.get("legacy_target",fight["choice"])
-    return f"beast_{fight['z']}_{idx}" if idx in HUNT_IDS else f"zone_{fight['z']}"
+    return f"beast_{fight['z']}_{idx}" if idx in HUNT_IDS else f"room_{fight['z']}_{idx}"
 
 def caption_pages(text):
     # Allow for non-BMP characters and keep paragraphs readable on phones.
@@ -307,6 +323,10 @@ def process(db, update, username):
             if cmd=="start" and not cb:
                 print(f"Получена команда входа · тема {topic or 'общая'}.",flush=True)
             result = player_action(db,state,chat["id"],uid,name,topic,cmd,cb.get("id"))
+            if cb and not result.get("notice"):
+                result["target"]=m["message_id"]
+                for other in result.get("others",[]):
+                    other["edit_only"]=True
             db.execute("INSERT OR REPLACE INTO games VALUES (?,?)",(chat["id"],json.dumps(state)))
         else:
             return
@@ -329,18 +349,33 @@ def combat_entities(text):
     return sorted(result,key=lambda entity: entity["offset"])
 
 def deliver(r):
-    if r["cb"]:
+    if not r.get("cb"):
+        return deliver_card(r)
+    notice=r["text"][:190] if r.get("notice") else ""
+    try:
+        if not notice:
+            return deliver_card(r)
+    except ApiError as exc:
+        if exc.code not in (400,403): raise
+        notice="Не удалось обновить карточку. Открой её командой /start в игровой теме."
+        raise
+    finally:
         try:
-            api("answerCallbackQuery",callback_query_id=r["cb"],text=r["text"][:190] if r["notice"] else "")
+            api("answerCallbackQuery",callback_query_id=r["cb"],text=notice)
         except ApiError as exc:
-            if exc.code != 400: raise
-        if r["notice"]: return
+            if exc.code!=400: raise
+
+def deliver_card(r):
+    edit_only=bool(r.get("cb") or r.get("edit_only"))
     args = dict(chat_id=r["chat"],text=r["text"],reply_markup={"inline_keyboard":r["rows"]})
     entities = combat_entities(r["text"])
     if entities: args["entities"] = entities
     target = r.get("target") if "slot" in r else (r["message"] if r["cb"] else None)
+    if edit_only and not target: return
     art = r.get("art") or ("world" if r.get("previous_art") else None)
-    if art and (ART_DIR/(art+".jpg")).is_file():
+    if target and r.get("previous_art") and (not art or not picture_file(art).is_file()):
+        art=r["previous_art"]
+    if art and (picture_file(art).is_file() or (target and art==r.get("previous_art"))):
         r["art"] = art
         pages = caption_pages(r["text"])
         page = min(r.get("page",0),len(pages)-1)
@@ -363,6 +398,7 @@ def deliver(r):
                 return target
             except ApiError as exc:
                 if "message is not modified" in str(exc): return target
+                if edit_only: raise
                 if exc.code!=400 or not any(term in str(exc).lower() for term in ("message to edit not found","can't be edited")): raise
         if r.get("thread"): photo_args["message_thread_id"]=r["thread"]
         return photo_request("sendPhoto",art,pages[page],disable_notification=True,**photo_args)["message_id"]
@@ -372,7 +408,7 @@ def deliver(r):
             return target
         except ApiError as exc:
             if "message is not modified" in str(exc): return target
-            if exc.code != 400: raise
+            if edit_only or exc.code != 400: raise
     if r["thread"]: args["message_thread_id"] = r["thread"]
     return api("sendMessage",disable_notification=True,**args)["message_id"]
 
@@ -383,7 +419,7 @@ def photo_request(method,art,caption,**args):
         media = ref or "attach://picture"
         data = dict(media=dict(type="photo",media=media,caption=caption,**styles)) if method=="editMessageMedia" else dict(photo=media,caption=caption,**styles)
         try:
-            response = api(method,upload=None if ref else ART_DIR/(art+".jpg"),**data,**args)
+            response = api(method,upload=None if ref else picture_file(art),**data,**args)
         except ApiError as exc:
             if ref and exc.code==400 and "file" in str(exc).lower(): continue
             raise
