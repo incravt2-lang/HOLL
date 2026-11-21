@@ -13,8 +13,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from world import HUNT_IDS
 from market import POTIONS, SCROLLS
-from game import TITLE, btn, play, board, level, migrate, title
+from game import TITLE, btn, play, board, level, migrate, title, target
 
 COMMANDS = {"town":"Город и торговцы","vault":"Редкие одиночные подземелья","zones":"Карта уровней","book":"Бестиарий и добыча","hunt":"Одиночная или совместная охота","start":"Меню свободной игры","hero":"Лист героя и выбор класса",
             "raid":"Сбор отряда и бой","bag":"Снаряжение","help":"Правила игры"}
@@ -57,12 +58,11 @@ def api(method, upload=None, **data):
                        body.get("parameters",{}).get("retry_after",2), method) from None
 
 MENU = [
-    [("Мой герой","hero"),("Сумка","bag"),("Гусзк","town")],
-    [("Охота","hunt"),("Подземелья","raid"),("Тайники","vault")],
-    [("Отряды","teams"),("Карта","zones"),("Бестиарий","book")],
-    [("Обмен","barter"),("Хроника","lore"),("Правила","help")],
+    [("Дневник","diary"),("Сумка","bag"),("Гусзк","town")],
+    [("Охота","hunt"),("Подземелья","dungeons"),("Отряды","teams")],
+    [("Карта","zones"),("Обмен","barter"),("Кодекс","codex")],
 ]
-ACTIONS = {"join","go","leave","hit","block","skill","finish","heal","healok","ward","fury"} | set(POTIONS)
+ACTIONS = {"pits","loft","closevote","join","go","leave","hit","block","skill","finish","heal","healok","ward","fury"} | set(POTIONS)
 
 def init_cards(db):
     db.execute("CREATE TABLE IF NOT EXISTS cards(chat INTEGER, slot TEXT, message INTEGER, "
@@ -101,18 +101,27 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     battle_id = key.split(":")[0] if op in ACTIONS else None
     before = list(fights.get(battle_id,{}).get("party",[]))
     previous = fights.get(battle_id,{})
+    old_votes=dict(previous.get("votes",{}))
+    previous_route=previous.get("route")
     previous_move = previous.get("moves",{}).get(uid)
     previous_drink = previous.get("drank",{}).get(uid)
     old_round = fights.get(battle_id,{}).get("round")
     mine = next((r for r in fights.values() if uid in r["party"]),None)
     if cmd=="start":
         hero = heroes.get(uid)
-        msg = f"{TITLE} · уровень {level(hero)}" if hero else f"{TITLE} · выбери класс в разделе «Мой герой»"
+        msg = f"{TITLE} · уровень {level(hero)}" if hero else f"{TITLE} · выбери класс в разделе «Дневник»"
         rows = [[btn(label,"nav:"+dest) for label,dest in row] for row in MENU]
         incoming = sum(o["to"]==uid for o in state.get("offers",{}).values())
+        if hero and hero.get("coast_trip") and not mine: rows.insert(0,[btn("Дорога к морю","road")])
         if incoming: msg += f"\nПредложений обмена: {incoming}"
         if hero and hero.get("last_result"): rows.append([btn("Итоги последнего боя","nav:report")])
         if mine: rows.insert(0,[btn("Вернуться в поход","nav:current")])
+    elif cmd=="codex":
+        msg="Кодекс"
+        rows=[[btn("Хроника","nav:lore"),btn("Бестиарий","nav:book"),btn("Правила","nav:help")]]
+    elif cmd=="dungeons":
+        msg="Подземелья"
+        rows=[[btn("Групповые","nav:raid"),btn("Одиночные","nav:vault")]]
     elif cmd=="report":
         report = heroes.get(uid,{}).get("last_result","Завершённых боёв пока нет.")
         # Older saves include a command footer after the combat report.
@@ -142,6 +151,10 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     if viewing: watches[uid] = mine["id"]
     else: watches.pop(uid,None)
     menu = [btn("☰ Меню","nav:start")]
+    if cmd in ("lore","book","help"):
+        menu.insert(0,btn("‹ Кодекс","nav:codex"))
+    elif cmd in ("raid","vault") and not mine:
+        menu.insert(0,btn("‹ Подземелья","nav:dungeons"))
     if cmd!="start": rows = rows+[menu]
     result = screen(db,chat,uid,name,topic,msg,rows,open_here=not cb)
     result["cb"] = cb
@@ -155,7 +168,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         result["art"] = screen_picture(cmd, heroes.get(uid))
     current = fights.get(battle_id,{})
     changed = battle_id and before and (ended or old_round!=current.get("round") or
-                                       before!=current.get("party") or previous_move!=current.get("moves",{}).get(uid)
+                                       old_votes!=current.get("votes",{}) or previous_route!=current.get("route") or before!=current.get("party") or previous_move!=current.get("moves",{}).get(uid)
                                        or previous_drink!=current.get("drank",{}).get(uid))
     if changed:
         others = []
@@ -173,18 +186,27 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     return result
 
 def fight_picture(fight):
+    if "votes" in fight: return "tannery_fork"
     mode = fight["mode"]
     if mode == "hunt":
         return hunt_picture(fight)
+    if fight["round"]:
+        if fight.get("route")=="loft" and fight["room"]==1:
+            return "room_tannery_loft"
+        return f"room_{fight['z']}_{target(fight)}"
     if mode == "vault":
         return f"vault_{fight['z']}"
     return f"raid_{fight['z']}_{fight['choice']}"
 
 def screen_picture(command, hero):
     op, *args = command.split(":")
+    if op=="craft": return "coast_veya" if args[:1]==["veya"] else "coast_hariton"
+    if op=="road": return "coast_road"
+    if op=="codex": return "book"
+    if op=="dungeons": return "raid"
     if op == "bio" and args:
         return "hero_" + args[0]
-    if op in ("hero", "class", "skills", "train") or (not hero and op not in ("start","help","lore")):
+    if op in ("hero", "diary", "class", "skills", "train") or (not hero and op not in ("start","help","lore")):
         return "hero_" + hero["class"] if hero else "teams"
     if op == "report":
         return hero.get("report_art","teams") if hero else "teams"
@@ -193,11 +215,9 @@ def screen_picture(command, hero):
         return ("vault_" if mode=="vault" else "zone_") + zone
     if op == "entry" and len(args)==2 and args[1].isdigit():
         zone, index = args[0], int(args[1])
-        if index < 3:
+        if index in HUNT_IDS:
             return f"beast_{zone}_{index}"
-        if index < 9:
-            return f"raid_{zone}_{(index-3)//3}"
-        return "vault_" + zone
+        return f"room_{zone}_{index}"
     if op == "shop" and len(args)==3:
         action = args[-1]
         if action.startswith("buy-"):
@@ -216,7 +236,7 @@ def screen_picture(command, hero):
 def hunt_picture(fight):
     # A migrated pre-zone hunt may reference a dungeon inhabitant.
     idx = fight.get("legacy_target",fight["choice"])
-    return f"beast_{fight['z']}_{idx}" if idx in (0,1,2) else f"zone_{fight['z']}"
+    return f"beast_{fight['z']}_{idx}" if idx in HUNT_IDS else f"zone_{fight['z']}"
 
 def caption_pages(text):
     # Allow for non-BMP characters and keep paragraphs readable on phones.
@@ -297,7 +317,7 @@ def combat_entities(text):
     patterns = (
         ("bold", r"^.+ · раунд [0-9]+$"),
         ("bold", r"^.+ · ур\. [0-9]+ · ([0-9]+ ХП)$"),
-        ("italic", r"^(?:Разбег|Предсмертный рывок|Твёрдый нарост) · (.+)$"),
+        ("italic", r"^(?:Разбег|Предсмертный рывок|Твёрдый нарост|Засада|Караульная стойка|Судорога Плети|Счёт недостачи) · (.+)$"),
         ("bold", r"^(?:Отряд: [0-9]+/[0-9]+ ХП.*|Отряд нанёс .+|Итоги раунда [0-9]+:|Действия сейчас · [0-9]+/[0-9]+ готовы)$"),
     )
     result = []

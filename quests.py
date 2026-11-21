@@ -2,7 +2,7 @@
 import random
 import time
 
-from world import LIMITS, RARITY, SCRAPS, ZONES, gear_names, gear_stat, level, monster, rank, strength, tier_name
+from world import CLASS_PIECES, HUMAN_IDS, faction, HUNT_IDS, EXTRA_HUNT_IDS, trade_value, LIMITS, RARITY, SCRAPS, ZONES, gear_names, gear_stat, level, monster, rank, strength, tier_name
 
 SHIFT = 6 * 3600
 KINDS = {
@@ -21,9 +21,9 @@ def rotation(state, now):
     rng = random.Random(f"{shift}:{','.join(sorted(heroes))}")
     pool = []
     for z, zone in enumerate(ZONES):
-        for n in range(9):
+        for n in (*range(9),*EXTRA_HUNT_IDS):
             lv = rank(z,n)
-            first = n if n < 3 else 3 + 3*((n-3)//3)
+            first = n if n in HUNT_IDS else 3 + 3*((n-3)//3)
             if lv > average+5 or rank(z,first) < average-5:
                 continue
             for kind in ("hunt","supply"):
@@ -34,7 +34,8 @@ def rotation(state, now):
     count = min(len(pool),rng.randint(5,10))
     chosen = []
     for kind in KINDS:
-        match = next((q for q in pool if q[0]==kind),None)
+        match = next((q for q in pool if q[0]==kind and q[2] in HUMAN_IDS),None)
+        if match is None: match = next((q for q in pool if q[0]==kind),None)
         if match:
             chosen.append(match)
             pool.remove(match)
@@ -62,7 +63,7 @@ def details(q):
         label = f"Устранить · {monster(z,n)} ×{q['need']}"
     else:
         label = f"Доставить · {SCRAPS[z][n]} ×{q['need']}"
-    hard = kind=="raid" or n>=3
+    hard = kind=="raid" or n not in HUNT_IDS
     xp = (28+rank(z,n)*3)*(3 if kind=="raid" else 2 if hard else 1)
     return label,xp,(15 if kind=="raid" else 7 if hard else 2)
 
@@ -79,11 +80,11 @@ def payout(q,h):
     h["peak"]=max(level(h),h.get("peak",1))
     tier=int(random.randrange(100)<rare)
     names=gear_names(z)
-    pool=[k for k in range(len(names)) if RARITY[z,k]==tier]
+    pool=[k for k in range(len(names)) if RARITY[z,k]==tier and ((z,k) not in CLASS_PIECES or CLASS_PIECES[z,k][2]==h["class"])]
     k=random.choice([k for k in pool if names[k] not in h["items"]] or pool)
     item=names[k]
     if item in h["items"]:
-        coins=4*strength(z,k)
+        coins=4*trade_value(z,k)
         h["wallet"]+=coins
         award=f"{item} уже есть · +{coins} мед."
     else:
@@ -122,8 +123,12 @@ def desk(state,uid,args):
                 label,xp,rare=details(q)
                 z,n=q["z"],q["n"]
                 site=ZONES[z][0]
-                if n>=3: site+=" · "+ZONES[z][2][(n-3)//3][0]
-                text=[label,KINDS[q["kind"]],site+f" · ур. {rank(z,n)}"]
+                if n not in HUNT_IDS: site+=" · "+ZONES[z][2][(n-3)//3][0]
+                orders={"robber":"Обозчики опознали налётчиков. Возврати дорогу подводам.",
+                        "oath":"Старый караульный список сходится. Беглец снова берёт пошлину оружием.",
+                        "cult":"У амбара опять собирают десятину в чашу без дна. Разберись со сборщиками.",
+                        "changed":"В списке дворов он ещё числится живым. Дозор подтверждает следы Плети."}
+                text=[label,orders.get(faction(z,n),KINDS[q["kind"]]),site+f" · ур. {rank(z,n)}"]
                 if q["kind"]=="supply": text.append("Источник: "+monster(z,n))
                 text.append(f"Награда: {xp} опыта и вещь · редкая {rare}%, иначе обычная.")
                 rows=[]

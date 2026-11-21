@@ -92,7 +92,49 @@ ZONES = [('Гусзкские выселки',
 TRAITS = (('Разбег', 'Каждый третий раунд наносит усиленный удар.'),
  ('Твёрдый нарост', 'Каждый чётный раунд поглощает часть урона.'),
  ('Предсмертный рывок', 'Ниже половины ХП наносит дополнительный урон.'))
+# Append-only encounter IDs preserve kill records, inventory and active contracts.
+NEW_HUNTS = (
+    (("Крыса мучного ларя","Крысиный резец"),("Амбарная сипуха","Серое маховое перо")),
+    (("Камышовая рысь","Камышовый рысьий коготь"),("Баран межевого брода","Обломок витого рога")),
+    (("Стоговый хорёк","Полоска хорьковой шкуры"),("Белильная ворона","Выбеленное воронье перо")),
+    (("Козерог снежной седловины","Скол ребристого рога"),("Пёс брошенной упряжи","Пряжка старой упряжи")),
+    (("Меднопёрый барсук","Медно-рыжая щетина"),("Слепой штольневый кожан","Перепонка кожана")),
+    (("Иловая цапля","Иловый клюв"),("Кабан ракушечных отмелей","Ракушечная пластина")),
+    (("Крот капустных гряд","Кротовая лапка"),("Хорь плетневых лазов","Клык плетневого хоря")),
+    (("Жаба соляной корки","Соляная бородавка"),("Аист рапных болот","Розовое перо аиста")),
+    (("Заяц мелового карьера","Меловая заячья шкурка"),("Кремнерогий олень","Осколок чёрного рога")),
+)
+HUMAN_HUNTS = (
+    (("Грабитель хлебных подвод","Срезанный обозный шнур","robber"),("Мельник с мучной коркой","Жетон заражённой мельницы","changed")),
+    (("Разбойник камышового брода","Краденый перевозный грош","robber"),("Клятвопреступник двух застав","Перечёркнутая пряжка стражи","oath")),
+    (("Сборщица пустой милостыни","Донце дырявой меры","cult"),("Белильщик с вытянутыми руками","Известковый напёрсток","changed")),
+    (("Налётчик санного тракта","Нож для санных ремней","robber"),("Беглый десятник перевала","Десятничья цепочка","oath")),
+    (("Пробирщик Пустой Меры","Медная чаша без дна","cult"),("Сросшийся каменотёс","Вросший осколок клина","changed")),
+    (("Налётчик сухого причала","Метка краденого багра","robber"),("Жаберный зазывала","Вздутый торговый свисток","changed")),
+    (("Вор огородной десятины","Надрезанная бирка десятины","robber"),("Клятвопреступник амбарных ворот","Спиленный караульный знак","oath")),
+    (("Проповедница соляной чаши","Соляная бусина проповедницы","cult"),("Заросший солью колодезник","Соляной слепок ладони","changed")),
+    (("Книгочей Пустой Меры","Лист недостачной книги","cult"),("Клятвопреступник Чеканного двора","Сорванная печать сотника","oath")),
+)
+HUMAN_IDS = (14,15)
+EXTRA_HUNT_IDS = (12,13) + HUMAN_IDS
+HUMAN_TRAITS = {
+    "robber":("Засада","В первом раунде наносит усиленный ответный удар."),
+    "oath":("Караульная стойка","Каждый чётный раунд гасит часть урона щитом."),
+    "changed":("Судорога Плети","Ниже половины ХП наносит усиленный ответный удар."),
+    "cult":("Счёт недостачи","Каждый третий раунд отнимает у каждого героя 1 энергию, если переживёт удар."),
+}
+def faction(z,n):
+    return HUMAN_HUNTS[z][n-14][2] if n in HUMAN_IDS else None
+
+def encounter_trait(z,n):
+    return HUMAN_TRAITS.get(faction(z,n),TRAITS[n%3])
+
+HUNT_IDS = (0,1,2) + EXTRA_HUNT_IDS
+
 def monster(z, idx):
+    if idx in HUMAN_IDS: return HUMAN_HUNTS[z][idx-14][0]
+    if idx in EXTRA_HUNT_IDS:
+        return NEW_HUNTS[z][idx-12][0]
     zone = ZONES[z]
     if idx >= 9:
         return VAULTS[z][1][idx-9]
@@ -101,9 +143,11 @@ def monster(z, idx):
     return zone[2][(idx-3)//3][1+(idx-3)%3]
 
 def rank(z, idx):
-    return 10*BANDS[z]+(1,5,9,3,4,5,7,9,10,8,9,10)[idx]
+    return 10*BANDS[z]+(1,5,9,3,4,5,7,9,10,8,9,10,3,7,2,8)[idx]
 
 def base_strength(z,k):
+    if (z,k) in CLASS_PIECES:
+        return (4+2*BANDS[z])*(2 if two_handed(gear_names(z)[k]) else 1) if gear_slot(z,k)==RIGHT else 2+BANDS[z]
     if k>=outfit_start(z): return 2+BANDS[z]
     if k>=arm_start(z):
         power = 4 + 2*BANDS[z] + (3 if z in VAULTS and (k-arm_start(z))%4==3 else 0)
@@ -143,7 +187,17 @@ SCRAPS = ['Стёртый собачий зуб|Мучное крылышко|К
  'ячейки']
 SCRAPS = [row.split("|") for row in SCRAPS]
 
+for z, row in enumerate(SCRAPS):
+    SCRAPS[z] = dict(enumerate(row))
+    SCRAPS[z].update({n: NEW_HUNTS[z][n-12][1] for n in (12,13)})
+    SCRAPS[z].update({n:HUMAN_HUNTS[z][n-14][1] for n in HUMAN_IDS})
+
+SCRAPS[6][98]="Связка выделанных шкур"
+
 def gear_names(z):
+    return NAMES[z]
+
+def legacy_names(z):
     return ZONES[z][3]+(VAULTS[z][2] if z in VAULTS else ())+tuple(name for _,name in EXTRA[z])+tuple(ARMS[z])+tuple(name for _,name in OUTFITS[z])
 
 # First two slots retain the familiar neck and body slots for legacy saves.
@@ -211,6 +265,7 @@ def original_count(z):
 BASE_SLOTS = [[0, 1, 0, 1, 7, 1], [0, 1, 0, 1, 0, 1], [0, 9, 0, 1, 7, 1], [0, 1, 0, 1, 0, 9], [0, 1, 0, 1, 0, 1], [0, 1, 0, 9, 7, 9], [0, 1, 7, 1, 0, 9, 0, 1], [0, 9, 0, 1, 0, 1, 0, 1], [0, 1, 0, 1, 0, 9, 0, 1]]
 
 def gear_slot(z,k):
+    if (z,k) in CLASS_PIECES: return CLASS_PIECES[z,k][1]
     if k>=outfit_start(z): return OUTFITS[z][k-outfit_start(z)][0]
     if k>=arm_start(z):
         return LEFT if ARM_BY_NAME[ARMS[z][k-arm_start(z)]][1] in ("Фолиант","Щит") else RIGHT
@@ -218,10 +273,10 @@ def gear_slot(z,k):
     return BASE_SLOTS[z][k]
 
 def gear_stat(z,k):
-    if k>=outfit_start(z): return int((k-outfit_start(z))%2==0)
-    if k>=arm_start(z): return int(ARM_BY_NAME[ARMS[z][k-arm_start(z)]][1]=="Щит")
-    if k<original_count(z): return k%2
-    return 0 if gear_slot(z,k) in (3,6,7,10,11) else 1
+    return int(gear_slot(z,k) != RIGHT)
+
+def required_level(z):
+    return 1+10*BANDS[z]
 
 from bisect import bisect_right
 LIMITS = [0]
@@ -271,8 +326,26 @@ OUTFITS = [
 def outfit_start(z):
     return arm_start(z)+len(ARMS[z])
 
+from loadouts import pieces
+CLASS_PIECES = {}
+NAMES = [list(legacy_names(z)) for z in range(len(ZONES))]
+SOURCES = {}
+for band in range(6):
+    zones=[z for z,b in enumerate(BANDS) if b==band]
+    for index,piece in enumerate(pieces(band)):
+        name,slot,cls,tier,family,bonus=piece
+        z=zones[(index//35+index%35)%len(zones)]
+        k=len(NAMES[z])
+        NAMES[z].append(name)
+        CLASS_PIECES[z,k]=piece
+        if slot in (LEFT,RIGHT): ARM_BY_NAME[name]=(cls,family)
+        # Ordinary outfits are available on hunts, rare outfits in both group dungeons.
+        sources=(0,) if tier==0 else (1,2) if tier==1 else tuple(range(3+(z in VAULTS)))
+        for source in sources: SOURCES.setdefault((z,source),[]).append(k)
+
 STAT_NAMES = ("Сила","Ловкость","Выносливость","Воля")
-def loot_slots(z,n):
+def legacy_loot_slots(z,n):
+    if n in EXTRA_HUNT_IDS: n=0
     source = 0 if n<3 else 1 if n<6 else 2 if n<9 else 3
     pools = 4 if z in VAULTS else 3
     arms = tuple(arm_start(z)+i for i in range(len(ARMS[z])) if i%pools==source)
@@ -290,19 +363,37 @@ TIER_WEIGHTS = {"hunt":(750,180,55,13,2),"raid":(650,230,90,25,5),"vault":(500,3
 RARITY = {}
 for z in range(len(ZONES)):
     for n in ((0,5,8,11) if z in VAULTS else (0,5,8)):
-        ordered = sorted(loot_slots(z,n),key=lambda k:(base_strength(z,k),k))
+        ordered = sorted(legacy_loot_slots(z,n),key=lambda k:(base_strength(z,k),k))
         for position,k in enumerate(ordered):
             RARITY[z,k] = position*4//(len(ordered)-1)
+
+RARITY.update({code:piece[3] for code,piece in CLASS_PIECES.items()})
+
+def loot_slots(z,n,cls=None):
+    source=0 if n in HUNT_IDS else n//3
+    extra=SOURCES.get((z,source),())
+    return legacy_loot_slots(z,n)+tuple(k for k in extra if cls is None or CLASS_PIECES[z,k][2]==cls)
 
 def tier_name(z,k):
     return TIERS[RARITY[z,k]]
 
-def strength(z,k):
-    tier = RARITY[z,k]
+def trade_value(z,k):
+    tier=RARITY[z,k]
     return base_strength(z,k)*(4+tier)//4+tier
 
-ITEM_TRAITS = {name:(idx,1+BANDS[z]//2+RARITY[z,outfit_start(z)+idx]) for z,row in enumerate(OUTFITS)
-               for idx,(_,name) in enumerate(row)}
+def strength(z,k):
+    tier = RARITY[z,k]
+    slot = gear_slot(z,k)
+    if slot == RIGHT:
+        return base_strength(z,k) + tier//2
+    armour = 2 if slot in (1,2,4,12) or ARM_BY_NAME.get(gear_names(z)[k],(None,None))[1]=="Щит" else 1
+    return armour + BANDS[z]//2 + tier//2
+
+# Primary power rises on even tiers; the role-specific bonus rises on odd tiers.
+# Outfit attributes follow the part of the body the item protects.
+OUTFIT_ATTRIBUTE = (3,2,2,3,0,2,1,3,3,2,2,1,2,1,3,0)
+ITEM_TRAITS = {name:(OUTFIT_ATTRIBUTE[slot],1+BANDS[z]//3+RARITY[z,outfit_start(z)+idx]//4)
+               for z,row in enumerate(OUTFITS) for idx,(slot,name) in enumerate(row)}
 
 ITEM_CODES = {item:f"{z}.{k}" for z in range(len(ZONES)) for k,item in enumerate(gear_names(z))}
 CODE_ITEMS = {code:item for item,code in ITEM_CODES.items()}
@@ -491,19 +582,21 @@ def secondary(z,k):
     arm=ARM_BY_NAME.get(item)
     if arm:
         cls,family=arm
-        if family=="Щит": kind="guard"
+        if family in ("Щит","Баклер"): kind="guard"
         elif family in ("Лук","Арбалет"): kind="crit" if family=="Лук" else "severity"
         elif cls=="guard": kind="guard" if family=="Фолиант" else "strike"
         elif cls=="nun": kind="medicine" if family in ("Фолиант","Жезл") else "strike"
         elif cls=="archer": kind="crit"
         elif cls=="smith": kind="severity"
         else: kind="reserve" if family=="Фолиант" else "strike"
+    elif (z,k) in CLASS_PIECES:
+        kind=CLASS_PIECES[z,k][5] if slot in (0,3,7,11) else ("reserve" if slot in (5,9,10,13) else "guard")
     elif any(word in item.lower() for word in ("полевого лекаря","милосердия","костоправа","ордена матери")):
         kind="medicine"
     elif any(word in item.lower() for word in ("прицел","ловчего","охотнич","егеря")): kind="crit"
     elif any(word in item.lower() for word in ("гвард","страж","караул","панцирь","кираса")): kind="guard"
     else: kind=("reserve","guard","guard","crit","guard","reserve","strike","severity","severity","reserve","reserve","strike","guard","reserve","guard","strike")[slot]
-    scale=1+BANDS[z]//2+RARITY[z,k]
+    scale=1+BANDS[z]//3+(RARITY[z,k]+1)//2
     return kind,3*scale if kind=="severity" else scale
 
 SECONDARY={item:secondary(z,k) for z in range(len(ZONES)) for k,item in enumerate(gear_names(z))}

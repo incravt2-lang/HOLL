@@ -1,8 +1,8 @@
 """Per-hero economy. Buttons bind purchases to the customer and wallet revision."""
 import random
 import time
-from world import tier_name,bonus_label,CODE_ITEMS, ITEM_TRAITS, STAT_NAMES, SLOTS, gear_slot, gear_stat
-from world import level, BANDS, VAULTS, SCRAPS, gear_names, strength
+from world import trade_value, tier_name,bonus_label,CODE_ITEMS, ITEM_TRAITS, STAT_NAMES, SLOTS, gear_slot, gear_stat
+from world import required_level, level, BANDS, VAULTS, SCRAPS, gear_names, strength
 
 BAGS = ((8,0),(18,40),(36,110),(64,260))
 POTIONS = {"heal":("Малая аптечная мера",6), "fury":("Глоток межевого перца",9), "ward":("Сусло воротного караула",9)}
@@ -34,7 +34,7 @@ def wares(hour):
     return random.Random(f"guszk-armourer-{hour}").sample(pool,4)
 
 def asking_price(z,k):
-    return 90+18*strength(z,k)
+    return 90+18*trade_value(z,k)
 
 def setup(h):
     if "wallet" not in h:
@@ -47,6 +47,7 @@ def units(h):
     return sum(h["junk"].values())
 
 def scrap_value(z,n):
+    if (z,n)==(6,98): return 12
     if n==99: return 18+4*BANDS[z]
     return 3+BANDS[z]+n//3
 
@@ -68,6 +69,7 @@ def market(h,uid,section="town",note=""):
     if note: text.append(note)
     rows = []
     if section=="town":
+        rows.append([{"text":"Дорога к морю","callback_data":"road"}])
         rows.append([{"text":"Комендант · доска поручений","callback_data":"orders"}])
         for label,key in (("Мартин · оружейник","armourer"),("Лада · аптекарь","apoth"),("Тиш · писец","scribe"),("Вей · скупщик","sell"),("Уна · сумочник","bags"),("Рада · ключница","keys")):
             rows.append(row(label,key))
@@ -79,13 +81,13 @@ def market(h,uid,section="town",note=""):
             z,k=map(int,code.split("."))
             item=CODE_ITEMS[code]
             power=strength(z,k)
-            bonus=f"+{power} к удару" if gear_stat(z,k)==0 else f"+{4*power} к здоровью"
+            bonus=f"+{power} к удару" if gear_stat(z,k)==0 else f"+{2*power} к здоровью"
             if item in ITEM_TRAITS:
                 idx,value=ITEM_TRAITS[item]
                 bonus+=f" · {STAT_NAMES[idx]} +{value}"
             bonus+=" · "+bonus_label(h,item)
             price=asking_price(z,k)
-            text.append(f"{tier_name(z,k)} · {item} · {SLOTS[gear_slot(z,k)]} · {bonus} · {price} мед.")
+            text.append(f"{tier_name(z,k)} · {item} · ур. {required_level(z)} · {SLOTS[gear_slot(z,k)]} · {bonus} · {price} мед.")
             if item not in h["items"]:
                 rows.append(row("Купить · "+item,f"stock-{hour}-{code}"))
         rows.append(row("Обновить прилавок","armourer"))
@@ -120,7 +122,7 @@ def market(h,uid,section="town",note=""):
         for z in range(len(BANDS)):
             for k,item in enumerate(gear_names(z)):
                 if item in h["items"] and item not in h["gear"]:
-                    equipment.append(row(f"Продать {item} · +{4*strength(z,k)} мед.",f"gear-{z}-{k}"))
+                    equipment.append(row(f"Продать {item} · +{4*trade_value(z,k)} мед.",f"gear-{z}-{k}"))
         rows.extend(equipment[page*12:(page+1)*12])
         if page: rows.append(row("Предыдущие вещи",f"sellpage{page-1}"))
         if (page+1)*12<len(equipment): rows.append(row("Следующие вещи",f"sellpage{page+1}"))
@@ -157,7 +159,7 @@ def trade(h,uid,p):
         item = gear_names(z)[k]
         if item not in h["items"] or item in h["gear"]: return "Предмет сейчас недоступен для продажи.",[]
         del h["items"][item]
-        delta,section = 4*strength(z,k),"sell"
+        delta,section = 4*trade_value(z,k),"sell"
     else:
         if len(key)==2 and key[0]=="buy" and key[1] in POTIONS:
             if level(h)<REQUIREMENT[key[1]]: return "Сначала повысь уровень.",[]
