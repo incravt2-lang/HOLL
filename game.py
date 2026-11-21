@@ -473,14 +473,21 @@ def resolve(s,r,viewer=None):
     r.update(round=r["round"]+1,moves={},used={},heal_requests={},deadline=time.time()+60,log=msg)
     return board(s,r,viewer)
 
-def atlas(mode,h):
+def atlas(mode,h,band=None):
+    if band is None:
+        bands=sorted({BANDS[z] for z in VAULTS}) if mode=="vault" else range(6)
+        buttons=[btn(f"{b*10+1}–{b*10+10}"+(" ◆" if (level(h)-1)//10==b else ""),
+                     f"band:{mode}:{b}") for b in bands]
+        return reply("Выбери уровни. ◆ — твой диапазон.",[buttons[i:i+2] for i in range(0,len(buttons),2)])
     rows = []
     for z,half in sorted(((z,i) for z in range(len(ZONES)) for i in (0,1)),key=lambda v:(BANDS[v[0]],v[1],v[0])):
+        if BANDS[z]!=band: continue
         if mode=="vault" and (z not in VAULTS or not half): continue
         low=required_level(z)+5*half
         mark=" ◆" if low<=level(h)<=low+4 else ""
         rows.append([btn(f"{area_name(z,half)} · {low}–{low+4}{mark}",f"area:{mode}:{z}:{half}")])
-    return reply("Выбери зону. ◆ — рекомендована для твоего уровня.",rows)
+    rows.append([btn("‹ Все уровни","nav:"+mode)])
+    return reply(f"Локации · уровни {band*10+1}–{band*10+10}",rows)
 
 def area(mode,z,h,half=0):
     name, beasts, raids, items = ZONES[z]
@@ -655,8 +662,12 @@ def play(s,uid,name,cmd):
     if op in MODES:
         if mine and op in ("hunt","raid","vault"): return board(s,mine,uid)
         return atlas(op,h)
+    if op=="band" and len(p)==3 and p[1] in MODES and p[2] in tuple(map(str,range(6))):
+        return atlas(p[1],h,int(p[2]))
     if op=="area" and (len(p)==3 or len(p)==4 and p[3] in ("0","1")) and p[1] in MODES and p[2] in DIGITS:
-        return area(p[1],int(p[2]),h,int(p[3]) if len(p)==4 else int(p[1]=="vault"))
+        z=int(p[2])
+        text,rows=area(p[1],z,h,int(p[3]) if len(p)==4 else int(p[1]=="vault"))
+        return text,rows+[[btn("‹ К локациям",f"band:{p[1]}:{BANDS[z]}")]]
     if op=="entry" and len(p)==3 and p[1] in DIGITS and p[2] in tuple(map(str,range(16))):
         z,n = map(int,p[1:])
         zone = ZONES[z]

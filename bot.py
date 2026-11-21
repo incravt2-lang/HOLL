@@ -215,6 +215,7 @@ def fight_picture(fight):
 
 def screen_picture(command, hero):
     op, *args = command.split(":")
+    if op=="band" and args: return {"raid":"raid","vault":"vault","book":"book"}.get(args[0],"world")
     if op=="craft": return "coast_veya" if args[:1]==["veya"] else "coast_hariton"
     if op=="road": return "coast_road"
     if op=="codex": return "book"
