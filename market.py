@@ -144,7 +144,8 @@ def market(h,uid,section="town",note="",active=None):
         for key,count in h["junk"].items():
             z,n = map(int,key.split("."))
             price = scrap_value(z,n)
-            text.append(f"{CURIOS[z] if n==99 else "Связка выделанных шкур" if n==98 else SCRAPS[z][n]} ×{count} · по {price} мед.")
+            name = CURIOS[z] if n == 99 else SCRAPS[z][n]
+            text.append(f"{name} ×{count} · по {price} мед.")
             total += count*price
         if active=="wall" and total: text.append("Караул на стене · +10% к сумме за хлам.")
         total,_=junk_payment(h,active)
