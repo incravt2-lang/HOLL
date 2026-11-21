@@ -5,7 +5,7 @@ from quests import SHIFT
 
 def needs(s,uid):
     counts=Counter()
-    board=s.get("contracts",{})
+    board=s["heroes"][uid].get("orders_board",{})
     if board.get("shift")==int(time.time())//SHIFT:
         for job in board["jobs"]:
             if job["owner"]==uid and not job["done"] and job["kind"]=="supply":

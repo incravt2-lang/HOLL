@@ -1,6 +1,8 @@
 """Telegram transport. Run one polling process per token."""
 import hashlib
+import alpha
 import pets
+import forks
 import city
 import zipfile
 from functools import lru_cache
@@ -19,7 +21,7 @@ from pathlib import Path
 
 from world import HUNT_IDS
 from market import POTIONS, SCROLLS
-from game import TITLE, btn, play, board, level, migrate, title, target
+from game import CLASSES, TITLE, btn, play, board, level, migrate, title, target
 
 COMMANDS = {"town":"Город и торговцы","vault":"Редкие одиночные подземелья","zones":"Карта уровней","book":"Бестиарий и добыча","hunt":"Одиночная или совместная охота","start":"Меню свободной игры","hero":"Лист героя и выбор класса",
             "raid":"Сбор отряда и бой","bag":"Снаряжение","help":"Правила игры"}
@@ -83,7 +85,7 @@ MENU = [
     [("Охота","hunt"),("Подземелья","dungeons"),("Отряды","teams")],
     [("Карта","zones"),("Обмен","barter"),("Кодекс","codex")],
 ]
-ACTIONS = {"pits","loft","closevote","join","go","leave","hit","block","skill","finish","heal","healok","ward","fury"} | set(POTIONS)
+ACTIONS = {"patha","pathb","pathok","coinok","faceboss","turnback","exitfinish","pits","loft","closevote","join","go","leave","hit","block","skill","finish","heal","healok","ward","fury"} | set(POTIONS)
 
 def init_cards(db):
     db.execute("CREATE TABLE IF NOT EXISTS cards(chat INTEGER, slot TEXT, message INTEGER, "
@@ -96,9 +98,10 @@ def init_cards(db):
             owner = "player:"+slot.rsplit(":",1)[1]
             db.execute("UPDATE OR IGNORE cards SET slot=? WHERE chat=? AND message=?",(owner,chat,msg))
 
-def listing(state):
+def listing(state,chat,topic):
     rows = []
     for r in state["fights"].values():
+        if r.get("chat")!=chat or (r.get("topic") or 0)!=(topic or 0):continue
         if r["round"] or r["mode"]=="vault" or len(r["party"])>=6: continue
         leader = state["heroes"][r["party"][0]]["name"]
         rows.append([btn(f"{title(r)} · {leader} · {len(r['party'])}/6","join:"+r["id"])])
@@ -122,6 +125,9 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     battle_id = key.split(":")[0] if op in ACTIONS else None
     before = list(fights.get(battle_id,{}).get("party",[]))
     previous = fights.get(battle_id,{})
+    previous_path_coin=previous.get("path_coin")
+    previous_coin=previous.get("exit_coin")
+    old_exit=dict(previous["exit_votes"]) if "exit_votes" in previous else None
     old_votes=dict(previous.get("votes",{}))
     previous_route=previous.get("route")
     previous_move = previous.get("moves",{}).get(uid)
@@ -151,6 +157,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         hero = heroes.get(uid)
         msg = f"{TITLE} · уровень {level(hero)}" if hero else f"{TITLE} · выбери класс в разделе «Дневник»"
         rows = [[btn(label,"nav:"+dest) for label,dest in row] for row in MENU]
+        msg += f"\n{alpha.RELEASE} · онлайн за 10 мин: {len(state.get('seen',{}))}"
         incoming = sum(o["to"]==uid for o in state.get("offers",{}).values())
         if hero and hero.get("coast_trip") and not mine: rows.insert(0,[btn("Дорога к морю","road")])
         if incoming: msg += f"\nПредложений обмена: {incoming}"
@@ -170,7 +177,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
             report = report.rsplit("\n",1)[0]
         msg,rows = report,[]
     elif cmd=="teams" and not mine and uid in heroes:
-        msg,rows = listing(state)
+        msg,rows = listing(state,chat,topic)
         rows.append([btn("Обновить список","nav:teams"),btn("Собрать отряд","nav:raid")])
     elif cmd=="current" and not mine:
         msg,rows = "Сейчас ты в лагере.",[]
@@ -212,7 +219,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         result["art"] = screen_picture(cmd, heroes.get(uid))
     current = fights.get(battle_id,{})
     changed = battle_id and before and (ended or old_round!=current.get("round") or
-                                       old_votes!=current.get("votes",{}) or previous_route!=current.get("route") or before!=current.get("party") or previous_move!=current.get("moves",{}).get(uid)
+                                       previous_path_coin!=current.get("path_coin") or previous_coin!=current.get("exit_coin") or old_exit!=current.get("exit_votes") or old_votes!=current.get("votes",{}) or previous_route!=current.get("route") or before!=current.get("party") or previous_move!=current.get("moves",{}).get(uid)
                                        or previous_drink!=current.get("drank",{}).get(uid))
     if changed:
         others = []
@@ -230,7 +237,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     return result
 
 def fight_picture(fight):
-    if "votes" in fight: return "tannery_fork"
+    if "votes" in fight: return "fork_"+forks.key(fight)
     mode = fight["mode"]
     if mode == "hunt":
         return hunt_picture(fight)
@@ -300,10 +307,71 @@ def caption_pages(text):
 def view_key(r):
     return hashlib.sha256(json.dumps([r["text"],r["rows"]],ensure_ascii=False).encode()).hexdigest()[:12]
 
+def shared_action(db,state,chat,uid,topic,cmd,cb,m,actor):
+    chat_id=chat["id"]
+    def card(text,rows):
+        out=screen(db,chat_id,uid,"Гусзк",topic,text,rows,open_here=True)
+        out.update(cb=cb,art="gate")
+        return out
+    now=time.time()
+    seen={i:t for i,t in state.get("seen",{}).items() if t>now-600}
+    if uid in state["heroes"] or uid in state.get("choices",{}):seen[uid]=now
+    state["seen"]=seen
+    choices=state.get("choices",{}).get(uid)
+    if choices:
+        selected=cmd.partition(":")[2] if cmd.startswith("legacy:") else ""
+        if selected not in choices:
+            rows=[]
+            for source,h in choices.items():
+                cls=CLASSES[h["class"]][0]
+                rows.append([btn(f"{cls} · ур. {level(h)} · {h['wallet']} мед. · группа {source}","legacy:"+source)])
+            return card("Перепись Гусзка · выбери героя\nУ героев поровну опыта. В общий мир перейдёт выбранный герой со своей сумкой.",rows)
+        state["heroes"][uid]=choices[selected]
+        del state["choices"][uid]
+    hero=state["heroes"].get(uid)
+    registered=db.execute("SELECT name FROM alpha_names WHERE uid=?",(uid,)).fetchone()
+    if hero and not registered:
+        reason=""
+        if cmd=="name_reply":
+            value=m.get("text","")
+            if not alpha.NAME.fullmatch(value):reason="Писарь просит переписать имя по правилам."
+            else:
+                try:db.execute("INSERT INTO alpha_names VALUES(?,?)",(uid,value))
+                except sqlite3.IntegrityError:reason="Это имя уже записано за другим героем."
+                else:
+                    hero["name"]=value
+                    db.execute("DELETE FROM alpha_prompt WHERE uid=?",(uid,))
+                    return card("В городскую книгу внесён "+value+".",[[btn("Продолжить","nav:resume")]])
+        return alpha.prompt(db,uid,chat_id,topic,cb,reason)
+    mine=next((r for r in state["fights"].values() if uid in r["party"]),None)
+    def local(r):
+        return r["chat"]==chat_id and ("topic" not in r or (r["topic"] or 0)==(topic or 0))
+    if mine and not local(mine):
+        return card("Твой поход продолжается в другом месте: "+mine["place"]+". Вернись к его карточке.",[])
+    op,_,args=cmd.partition(":")
+    target_fight=state["fights"].get(args.split(":")[0]) if op in ACTIONS else None
+    if target_fight and not local(target_fight):
+        return card("Этот поход проходит в другой группе или теме.",[[btn("В меню","nav:start")]])
+    if mine and "topic" not in mine:mine["topic"]=topic
+    if cmd=="resume":cmd="current" if mine else "start"
+    if cmd.startswith("legacy:"):cmd="start"
+    name=registered[0] if registered else actor.get("first_name","Путник")[:32]
+    result=player_action(db,state,chat_id,uid,name,topic,cmd,cb)
+    for r in state["fights"].values():
+        if "chat" not in r:
+            place=chat.get("title") or str(chat_id)
+            if topic:place+=f" · тема {topic}"
+            r.update(chat=chat_id,topic=topic,place=place)
+    if not registered and uid in state["heroes"]:
+        seen[uid]=now
+        return alpha.prompt(db,uid,chat_id,topic,cb)
+    return result
+
 def process(db, update, username):
     """Commit the game and the pending response together before sending."""
     key = update["update_id"]
     with db:
+        db.execute("BEGIN IMMEDIATE")
         existing = db.execute("SELECT result FROM pending WHERE id=?", (key,)).fetchone()
         if existing: return json.loads(existing[0])
         cb = update.get("callback_query", {})
@@ -323,9 +391,14 @@ def process(db, update, username):
             cmd = cb.get("data", "")
         else:
             word = (m.get("text") or " ").split()
-            if not word or not word[0].startswith("/"): return
-            cmd, _, mention = word[0][1:].partition("@")
-            if cmd not in COMMANDS or (mention and mention.lower()!=username.lower()): return
+            topic=m.get("message_thread_id") if m.get("is_topic_message") else None
+            reply_id=m.get("reply_to_message",{}).get("message_id")
+            if reply_id and alpha.is_reply(db,str(actor["id"]),chat["id"],topic,reply_id):
+                cmd="name_reply"
+            elif word and word[0].startswith("/"):
+                cmd, _, mention = word[0][1:].partition("@")
+                if cmd not in COMMANDS or (mention and mention.lower()!=username.lower()): return
+            else:return
         if cb and cmd.startswith("nav:"):
             cmd = cmd[4:]
         if chat["type"]=="private":
@@ -339,7 +412,8 @@ def process(db, update, username):
                 if not owner or owner[0]!="player:"+uid:
                     return dict(chat=chat["id"],cb=cb["id"],notice=True,
                                 text="Открой свою карточку. Если её ещё нет, отправь /start@"+username+".")
-            if cb and cmd.startswith("page:"):
+            state=alpha.load(db)
+            if cb and cmd.startswith("page:") and db.execute("SELECT 1 FROM alpha_names WHERE uid=?",(uid,)).fetchone():
                 rec = db.execute("SELECT view FROM card_media WHERE chat=? AND message=?",(chat["id"],m["message_id"])).fetchone()
                 parts = cmd.split(":")
                 view = json.loads(rec[0]) if rec and rec[0] else None
@@ -347,18 +421,13 @@ def process(db, update, username):
                     view.update(cb=cb["id"],page=int(parts[2]),target=m["message_id"],previous_art=view["art"])
                     return view
                 return dict(chat=chat["id"],cb=cb["id"],notice=True,text="Карточка уже обновилась.")
-            stored = db.execute("SELECT state FROM games WHERE chat=?", (chat["id"],)).fetchone()
-            state = json.loads(stored[0]) if stored else {}
-            name = " ".join(actor.get("first_name","Странник").split())[:32] or "Странник"
             topic = m.get("message_thread_id") if m.get("is_topic_message") else None
-            if cmd=="start" and not cb:
-                print(f"Получена команда входа · тема {topic or 'общая'}.",flush=True)
-            result = player_action(db,state,chat["id"],uid,name,topic,cmd,cb.get("id"))
+            result=shared_action(db,state,chat,uid,topic,cmd,cb.get("id"),m,actor)
             if cb and not result.get("notice"):
                 result["target"]=m["message_id"]
                 for other in result.get("others",[]):
                     other["edit_only"]=True
-            db.execute("INSERT OR REPLACE INTO games VALUES (?,?)",(chat["id"],json.dumps(state)))
+            alpha.save(db,state)
         else:
             return
         db.execute("INSERT INTO pending VALUES (?,?)", (key,json.dumps(result)))
@@ -400,6 +469,11 @@ def deliver(r):
             if exc.code!=400: raise
 
 def deliver_card(r):
+    if r.get("prompt"):
+        args=dict(chat_id=r["chat"],text=r["text"],entities=[dict(type="text_mention",offset=0,length=6,user=dict(id=int(r["uid"]),is_bot=False,first_name="Путник"))],
+                  reply_markup=dict(force_reply=True,selective=True,input_field_placeholder="Aldric"))
+        if r.get("thread"):args["message_thread_id"]=r["thread"]
+        return api("sendMessage",**args)["message_id"]
     edit_only=bool(r.get("cb") or r.get("edit_only"))
     args = dict(chat_id=r["chat"],text=r["text"],reply_markup={"inline_keyboard":r["rows"]})
     entities = combat_entities(r["text"])
@@ -468,6 +542,9 @@ def media_request(method,art,caption,**args):
         return response
 
 def remember_card(db,r,message):
+    if r.get("prompt"):
+        if message:db.execute("UPDATE alpha_prompt SET message=? WHERE uid=? AND ticket=?",(message,r["uid"],r["prompt"]))
+        return
     if not message or not r.get("slot"):
         return
     slot = r["slot"]
@@ -513,12 +590,17 @@ def main():
                (not local_db.exists() and hosted_db.parent.is_dir()) else local_db)
     db = sqlite3.connect(database)
     init_cards(db)
+    alpha.init(db)
     db.executescript("CREATE TABLE IF NOT EXISTS games(chat INTEGER PRIMARY KEY,state TEXT);"
                      "CREATE TABLE IF NOT EXISTS pending(id INTEGER PRIMARY KEY,result TEXT);")
     db.execute("CREATE TABLE IF NOT EXISTS cursor_state(slot INTEGER PRIMARY KEY, value INTEGER, saved REAL)")
     cursor = db.execute("SELECT value,saved FROM cursor_state WHERE slot=1").fetchone()
     offset = cursor[0] if cursor and time.time()-cursor[1]<6*86400 else None
     db.execute("CREATE TABLE IF NOT EXISTS profile_state(key TEXT PRIMARY KEY,applied TEXT,retry REAL)")
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        alpha.load(db)
+    print("Мёртвая мера · Alpha 0.1 · общий мир",flush=True)
     next_profile = 0
     username = None
     while True:

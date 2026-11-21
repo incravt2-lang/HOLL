@@ -2,6 +2,9 @@ from world import SEAM_SHIELD, wear_level, is_humanoid, trade_value
 """Rules for one group's campaign. All identifiers in saved JSON are strings."""
 import random
 import city
+import haul
+import forks
+from copy import deepcopy
 import secrets
 import time
 
@@ -21,7 +24,7 @@ HISTORIES = {
 }
 BASE_STATS = {"guard":(4,2,5,2),"nun":(2,2,3,6),"archer":(3,6,2,2),
               "smith":(5,2,4,2),"witch":(2,4,2,5)}
-from world import ITEM_TRAITS,STAT_NAMES,outfit_start
+from world import class_power, ITEM_TRAITS,STAT_NAMES,outfit_start
 from world import worn_bonus,bonus_label
 TALENTS = {
     "guard":("Удар в брешь","Стальной строй","Острый клинок"),
@@ -71,7 +74,7 @@ def stats(h):
     return values
 
 def health(h):
-    return 19+2*level(h)+2*item_bonus(h,1)+3*stats(h)[2]
+    return 19+2*level(h)+item_bonus(h,1)+3*stats(h)[2]
 
 def energy(h):
     return 4+stats(h)[3]+bonus(h,"reserve")
@@ -97,7 +100,7 @@ from chronicle import TITLE, CHAPTERS, ZONE_NOTES
 from world import CLASS_PIECES, OLD_CODES, CODE_ITEMS, ITEM_CODES, RARITY, TIERS, TIER_WEIGHTS, loot_slots, tier_name
 HELP = TITLE + """
 Охота — для 1–6 героев. В обычное подземелье идут 2–6 героев, в тайник с ключом — один.\n
-Умение тратит 4 энергии; удар восстанавливает 1, блок — 3. У каждого героя свой запас.\nУровни 1–60. Все зоны открыты, диапазон подсказывает сложность. Каждый выбирает ход. Через минуту участник может закрыть раунд, пропустившие блокируют. При гибели теряется опыт и может выпасть надетая вещь."""
+Умение тратит 4 энергии; удар восстанавливает 1, блок — 3. У каждого героя свой запас.\nУровни 1–60. Все зоны открыты, диапазон подсказывает сложность. Каждый выбирает ход. Через минуту участник может закрыть раунд, пропустившие блокируют. Поручения приносят опыт и медь. Перед боссом можно уйти с находками двух залов. При гибели добыча похода теряется, штраф — до 5% цены уровня и 5% риска потерять одну надетую вещь. Уровень сохраняется."""
 def btn(label, data):
     return {"text": label, "callback_data": data}
 
@@ -105,14 +108,19 @@ def reply(text, rows=()):
     return text, list(rows)
 
 def migrate(s):
-    if s.get("version")==10: return
-    if s.get("version") not in (7,8,9): migrate_names(s)
-    for hero in s["heroes"].values():
-        for name in hero["items"]:
+    if s.get("version")==11: return
+    if s.get("version") not in (7,8,9,10): migrate_names(s)
+    def refresh(items):
+        for name in items:
             z,k=map(int,ITEM_CODES[name].split("."))
-            hero["items"][name]=[gear_stat(z,k),strength(z,k)]
+            items[name]=[gear_stat(z,k),strength(z,k)]
+    for hero in s["heroes"].values():
+        refresh(hero["items"])
         enforce_wear_level(hero)
-    s["version"]=10
+    for fight in s.get("fights",{}).values():
+        for bag in fight.get("haul",{}).values():
+            refresh(bag.get("items",{}))
+    s["version"]=11
 
 def enforce_wear_level(hero):
     for slot,item in enumerate(hero["gear"]):
@@ -193,10 +201,7 @@ def migrate_old(s):
     s.update(version=2,fights=fights)
 
 def effective_power(h,item):
-    power = h["items"][item][1]
-    if item in ARM_BY_NAME and ARM_BY_NAME[item][0]!=h["class"]:
-        return max(1,power//2)
-    return power
+    return class_power(h["class"],item,h["items"][item][1])
 
 def item_bonus(h,slot):
     return sum(effective_power(h,item) for item in h["gear"] if item and h["items"][item][0]==slot)
@@ -204,11 +209,11 @@ def item_bonus(h,slot):
 def death(h):
     lv = level(h)
     h["peak"] = max(lv,h.get("peak",1))
-    loss = min(h["xp"],8*(50+10*min(lv,59))//5)
+    loss = min(h["xp"]-LIMITS[lv-1],8*(50+10*min(lv,59))//20)
     h["xp"] -= loss
     slots = [j for j,v in enumerate(h["gear"]) if v]
     lost = None
-    if slots and random.random()<0.35:
+    if slots and random.random()<0.05:
         slot = random.choice(slots)
         lost = h["gear"][slot]
         del h["items"][lost]
@@ -257,29 +262,36 @@ def actions_text(s,r,finished=False):
 def heal_count(r):
     return sum(p[0] in HEALS for p in r.get("used",{}).values())
 
-ROUTES = {"pits":"Известковые ямы","loft":"Сушильня"}
+ROUTES = {"pits","loft","patha","pathb"}
 
 def vote_route(s,r,uid,op):
     votes=r["votes"]
-    if op in ROUTES:
-        votes[uid]=op
-    elif op!="closevote" or time.time()<r["deadline"] or not votes:
-        return reply("Выберите путь. Через минуту можно подвести итог по поданным голосам.")
-    if len(votes)==len(r["party"]) or op=="closevote":
-        counts={path:list(votes.values()).count(path) for path in ROUTES}
-        highest=max(counts.values())
-        # Party order starts with the leader and also resolves a timed tie in their absence.
-        path=next(votes[i] for i in r["party"] if i in votes and counts[votes[i]]==highest)
-        r["route"]=path
-        del r["votes"]
-        if path=="pits": r["enemy"]+=4*len(r["party"])
-        r["log"]="Отряд выбрал путь: "+ROUTES[path]+"."
-        r["deadline"]=time.time()+60
+    choices=forks.options(r)
+    if "path_coin" in r:
+        if op!="pathok": return board(s,r,uid)
+        path=r.pop("path_coin")
+    else:
+        if op in choices: votes[uid]=op
+        elif op!="closevote" or time.time()<r["deadline"] or not votes:
+            return board(s,r,uid)
+        if len(votes)<len(r["party"]) and op!="closevote": return board(s,r,uid)
+        counts={p:list(votes.values()).count(p) for p in choices}
+        if len(set(counts.values()))==1:
+            r["path_coin"]=random.choice(list(choices))
+            return board(s,r,uid)
+        path=max(counts,key=counts.get)
+    r["route"]=path
+    del r["votes"]
+    if path=="pits": r["enemy"]+=4*len(r["party"])
+    r["log"]=forks.choose(s,r,choices[path])
+    r["deadline"]=time.time()+60
     return board(s,r,uid)
 
 def board(s,r,viewer=None):
     key = r["id"]
-    risk = "Старый поход: при гибели потерь нет." if r.get("legacy_safe") else "При гибели: −20% цены уровня и 35% риска потерять одну надетую вещь."
+    risk = "Старый поход: при гибели потерь нет." if r.get("legacy_safe") else "При гибели: до −5% цены уровня без потери уровня и 5% риска потерять одну надетую вещь."
+    if r["mode"]!="hunt":
+        risk+=" Добыча залов остаётся в походе до выхода. Перед боссом можно уйти с находками."
     if not r["round"]:
         names = ", ".join(s["heroes"][i]["name"] for i in r["party"])
         if r["mode"]=="vault":
@@ -290,16 +302,36 @@ def board(s,r,viewer=None):
     z,n = r["z"],target(r)
     suffix = f"{key}:{r['round']}"
     stage = "" if r["mode"]=="hunt" else f" · зал {r['room']+1}/3"
+    if "exit_coin" in r:
+        forward = r["exit_coin"]=="faceboss"
+        result = "Орёл — идём к боссу." if forward else "Решка — возвращаемся с добычей."
+        return reply(f"{title(r)} · перед боссом\nОтряд не договорился и выбрал подбросить монету.\n\n{result}",
+                     [[btn("Войти" if forward else "Повернуть назад",f"coinok:{suffix}")]])
+    if "exit_votes" in r:
+        votes=r["exit_votes"]
+        rows=[[btn(f"{label} · {list(votes.values()).count(action)}",f"{action}:{suffix}")]
+              for action,label in (("turnback","Уйти с добычей"),("faceboss","К боссу"))]
+        if len(r["party"])>1: rows.append([btn("Подвести итог через минуту",f"exitfinish:{suffix}")])
+        return reply(f"{title(r)} · перед боссом\nОтряд: {r['hp']}/{r['maxhp']} ХП\n"
+                     "При отходе каждый унесёт находки двух залов. При гибели вся добыча похода пропадёт. "
+                     "При равенстве голосов путь решит монета.\n\n"+r["log"],rows)
     if "votes" in r:
         votes=r["votes"]
-        rows=[[btn(f"{label} · {list(votes.values()).count(path)}",f"{path}:{suffix}")] for path,label in ROUTES.items()]
-        rows.append([btn("Завершить голосование по таймеру",f"closevote:{suffix}")])
-        text=(f"{title(r)} · развилка после первого зала\nОтряд: {r['hp']}/{r['maxhp']} ХП\n\n"
-              "Известковые ямы — у противника больше ХП, его удары сильнее. За победу каждый получит связку шкур (12 мед.).\n"
-              "Сушильня — здесь можно сорвать цепь. Босс пропустит первый ответный удар.\n\n"
-              "Большинство выбирает путь. При равенстве решает предводитель; если он не голосовал — первый проголосовавший по списку отряда.")
+        choices=forks.options(r)
+        if "path_coin" in r:
+            path=r["path_coin"]
+            face="Орёл" if path==next(iter(choices)) else "Решка"
+            return reply(f"{title(r)} · развилка\nОтряд не договорился и выбрал подбросить монету.\n\n{face} — {choices[path].label}.",
+                         [[btn(choices[path].label,f"pathok:{suffix}")]])
+        rows=[[btn(choice.label+(f" · {list(votes.values()).count(path)}" if len(r["party"])>1 else ""),f"{path}:{suffix}")] for path,choice in choices.items()]
+        text=title(r)+" · развилка\n\n"+forks.PLACES[forks.key(r)][0]
+        for path in choices.values():
+            text+="\n\n"+path.label+" — "+path.promise
+        if len(r["party"])>1:
+            rows.append([btn("Подвести итог через минуту",f"closevote:{suffix}")])
+            text+="\n\nПри ничьей путь определит монета."
         return reply(text+"\n\n"+r["log"],rows)
-    if r.get("route") and r["room"]==1: stage += " · "+ROUTES[r["route"]]
+    if r.get("route") and r["room"]==1: stage += " · "+forks.options(r)[r["route"]].label
     confirm = []
     count = heal_count(r)
     if count and viewer and r.get("heal_requests",{}).get(viewer)==count:
@@ -353,6 +385,9 @@ def resolve(s,r,viewer=None):
     enemy_lv = r.get("road_level",rank(z,n))
     party = [s["heroes"][i] for i in r["party"]]
     dmg = shield = heal = cracks = hits = 0
+    effect=r.get("fork_effect")
+    boss=r["mode"]!="hunt" and r["room"]==2
+    answers=r.get("boss_answers",0)
     rolls = {}
     split_bonus = 0
     poisons = {}
@@ -363,7 +398,7 @@ def resolve(s,r,viewer=None):
         cap = energy(h)
         stamina[i] = min(cap,stamina.get(i,cap)+(-4 if a=="skill" else 3 if a=="block" else 1))
         effects = r.get("buffs",{}).get(i,{})
-        if effects.get("regen",0)>=r["round"]: heal += city.restore(4+lv//3,city.buff(s))
+        if effects.get("regen",0)>=r["round"]: heal += city.restore(4+lv//3,city.buff(s))*(110 if forks.active(h,"cup") else 100)//100
         if effects.get("venom",0)>=r["round"]: poisons[i] = 6+lv//3
         if effects.get("iron",0)>=r["round"]: shield += 12+lv
         elif effects.get("ward",0)>=r["round"]: shield += 5+lv//2
@@ -392,7 +427,10 @@ def resolve(s,r,viewer=None):
                 shield += 5+lv//2+mastery
                 base += 4+lv//2+2*mastery
         amount = random.randint(*bounds(base))
-        critical = random.randrange(100)<crit(h)
+        critical = random.randrange(100)<crit(h)+(15 if boss and not answers and effect=="crit" else 0)
+        if a=="hit" and not critical and forks.active(h,"measure") and i not in r.get("measured",[]):
+            amount=bounds(base)[1]
+            r.setdefault("measured",[]).append(i)
         rolls[i]=(amount*multiplier(h)//100 if critical else amount,critical)
     sealed = r.get("sealed",0)==r["round"]
     group = faction(z,n)
@@ -421,16 +459,23 @@ def resolve(s,r,viewer=None):
     msg = f"{summary}\nОтряд нанёс {dmg} урона."
     if r["enemy"]<=0:
         record_win(s,r["party"],z,n,r["mode"])
-        city_news = city.victory(s,r["party"],z,n,r["mode"])
+        dungeon = r["mode"]!="hunt"
+        city_news = city.victory(s,r["party"],z,n,r["mode"],fight=r if dungeon else None)
+        if dungeon:
+            bags=r.setdefault("haul",{})
+            projected=[haul.preview(h,bags.setdefault(uid,{})) for uid,h in zip(r["party"],party)]
+            originals=deepcopy(projected)
+        else:
+            projected=party
         scraps = [city_news] if city_news else []
-        for who,h in zip(r["party"],party):
+        for who,h in zip(r["party"],projected):
             needed=needs(s,who)
             if is_humanoid(z,n) and random.random() < COIN_CHANCE:
                 copper = random.randint(1, 3)
                 h["wallet"] += copper
                 scraps.append(f"{h['name']}: [Монеты] +{copper} мед.")
             note=find_note(h,z,n,r["mode"])
-            if note: scraps.append(f"{h['name']}: [Записки] «{note}» · сохранена в Кодексе")
+            if note: scraps.append(f"{h['name']}: [Записки] «{note}»")
             roll=random.random()
             material=f"{z}.{99 if roll<0.06 else n}"
             protected=h["junk"].get(material,0)<needed.get(material,0)
@@ -447,7 +492,7 @@ def resolve(s,r,viewer=None):
                 elif r["mode"]=="hunt":
                     label += " (уже есть)"
                 else:
-                    recipients=[i for i in r["party"] if item not in s["heroes"][i]["items"]]
+                    recipients=[i for i,member in zip(r["party"],projected) if item not in member["items"]]
                     if recipients and r["mode"]=="raid":
                         ticket=secrets.token_hex(6)
                         h.setdefault("spare_drops",{})[ticket]=[z,k,recipients]
@@ -457,28 +502,11 @@ def resolve(s,r,viewer=None):
                         h["wallet"] += payment
                         label += f" (повтор: +{payment} мед.)"
                 scraps.append(f"{h['name']}: {label}")
-            book = h.setdefault("book",{})
+            book = s["heroes"][who].setdefault("book",{})
             key = f"{z}.{n}"
             book[key] = book.get(key,0)+1
-        if r["mode"]=="hunt" or r["room"]==2:
-            del s["fights"][r["id"]]
-            for member in party:
-                member["returning_from_fight"] = True
-            lines = [f"Победа · {title(r)}",msg] + scraps
-            for h in party:
-                if (r["mode"],z,r["choice"])==("raid",6,0):
-                    h["buckles"]=h.get("buckles",0)+1
-                    lines.append(f"{h['name']}: [Трофеи] пряжка Кожевен · всего {h['buckles']}. Пять принимает мастер у моря.")
-                lv = level(h)
-                base = (16+min(enemy_lv,lv+4)*2)*(1 if r["mode"]=="hunt" else 3)
-                xp = min(LIMITS[-1]-h["xp"],city.earned(max(1,27*base//(10*(1+max(0,lv-enemy_lv-4)))),city.buff(s),h))
-                h["xp"] += xp
-                h["peak"] = max(level(h),h.get("peak",1))
-                up = f" · уровень {level(h)}!" if level(h)>lv else ""
-                lines.append(f"{h['name']}: +{xp} опыта{up}")
-            return reply("\n".join(lines),[[btn("Продолжить дорогу","road")]] if "road_level" in r else [])
         if r.get("route")=="pits" and r["room"]==1:
-            for who,h in zip(r["party"],party):
+            for who,h in zip(r["party"],projected):
                 if units(h,needs(s,who))<capacity(h):
                     h["junk"]["6.98"]=h["junk"].get("6.98",0)+1
                     scraps.append(h["name"]+": [Хлам] связка выделанных шкур")
@@ -486,17 +514,44 @@ def resolve(s,r,viewer=None):
                     payment,h["sale_tenths"]=scrap_payment(h,12,city.buff(s))
                     h["wallet"]+=payment
                     scraps.append(f"{h['name']}: шкуры проданы за {payment} мед. (сумка полна)")
+        if dungeon:
+            for uid,before,after in zip(r["party"],originals,projected):
+                haul.store(bags[uid],before,after)
+        if r["mode"]=="hunt" or r["room"]==2:
+            del s["fights"][r["id"]]
+            for member in party:
+                member["returning_from_fight"] = True
+            haul.bank(s,r)
+            reward=forks.pay(s,r)
+            lines = [f"Победа · {title(r)}",msg] + ([reward] if reward else []) + scraps
+            for h in party:
+                if (r["mode"],z,r["choice"])==("raid",6,0):
+                    h["buckles"]=h.get("buckles",0)+1
+                    lines.append(f"{h['name']}: [Трофеи] пряжка Кожевен · всего {h['buckles']}. Пять принимает мастер у моря.")
+                lv = level(h)
+                base = (16+min(enemy_lv,lv+4)*2)*{"hunt":1,"raid":6,"vault":1}[r["mode"]]
+                xp = min(LIMITS[-1]-h["xp"],city.earned(max(1,(27 if r["mode"]=="raid" else 12)*base//(10*(1+max(0,lv-enemy_lv-4)))),city.buff(s),h))
+                h["xp"] += xp
+                h["peak"] = max(level(h),h.get("peak",1))
+                up = f" · уровень {level(h)}!" if level(h)>lv else ""
+                lines.append(f"{h['name']}: +{xp} опыта{up}")
+            return reply("\n".join(lines),[[btn("Продолжить дорогу","road")]] if "road_level" in r else [])
         if r.get("route")=="loft" and r["room"]==1:
             r["cut_chain"]=True
             msg+=" Отряд сорвал цепь с балки."
-        if r["mode"]=="raid" and r["z"]==6 and r["choice"]==0 and r["room"]==0:
+        if dungeon and r["room"]==0:
             r["votes"]={}
         r["room"] += 1
+        if r["room"]==2:
+            r["exit_votes"]={}
+            if effect=="energy":
+                for uid,h in zip(r["party"],party): stamina[uid]=min(energy(h),stamina[uid]+3)
+                msg+=" У печи каждый восстановил до 3 энергии."
         r["enemy"] = maximum(r)
-        if (r["mode"],z,r["room"])==("vault",8,2): r["bell_raised"]=True
+        if (r["mode"],z,r["room"])==("vault",8,2) and effect!="bell": r["bell_raised"]=True
         r["hp"] = min(r["maxhp"],r["hp"]+sum(4+level(h)//2 for h in party))
         msg += " Враг повержен. Отряд перевёл дух."
-        if scraps: msg += "\n"+" · ".join(scraps)
+        if scraps: msg += "\nНаходки до выхода: "+" · ".join(scraps)
     else:
         raw = 3+enemy_lv+(4+enemy_lv//4 if r["mode"]=="vault" else 0)
         if r["mode"]=="hunt": raw -= max(0,enemy_lv-10)//2
@@ -508,6 +563,16 @@ def resolve(s,r,viewer=None):
         if not sealed and (rush or (wounded and 2*r["enemy"]<maximum(r))):
             raw += 4+enemy_lv//3
         if r.get("route")=="pits" and r["room"]==1: raw+=2
+        if boss and effect:
+            r["boss_answers"]=answers+1
+            if forks.key(r) in ("0_1","5_0") and answers==(2 if effect=="delay" else 0):
+                raw+=4+enemy_lv//3
+                msg+=" Босс нанёс тяжёлый удар."
+            if forks.key(r)=="3_0" and not answers:
+                if effect=="strap": msg+=" Упряжь распалась в руках Смотрителя."
+                else:
+                    for uid in stamina: stamina[uid]=max(0,stamina[uid]-2)
+                    msg+=" Ремни затянулись: −2 энергии."
         gap=max(0,enemy_lv-sum(level(h) for h in party)//len(party)-1)
         raw=raw*(100+12*gap)//100
         if r.pop("bell_raised",False):
@@ -516,6 +581,16 @@ def resolve(s,r,viewer=None):
                 raw+=enemy_lv//2
                 msg+=" Гиря ударила с размаху."
         taken = max(0,random.randint(*bounds(raw*len(party)))-shield)
+        if boss and effect=="bell" and answers==1:r["bell_raised"]=True
+        if boss and not answers:
+            if effect=="skip" or (effect=="block" and any(r["moves"].get(i,"block")=="block" for i in r["party"])):
+                taken=0
+                msg+=" Выбранный путь сорвал ответ босса."
+            if effect=="half":taken//=2
+        if effect=="roomskip" and r["room"]==1 and not r.get("roomskip_used"):
+            taken=0
+            r["roomskip_used"]=True
+            msg+=" Носильщик ещё выбирается из складок сукна."
         if r.pop("cut_chain",False):
             taken=0
             msg+=" Мастер дёрнул крюк. Оборванная цепь рухнула на пол."
@@ -524,6 +599,16 @@ def resolve(s,r,viewer=None):
             if city.buff(s)=="papers":
                 taken=taken*85//100
                 msg+=" Караульный строй смягчил первый удар."
+        if taken and not r.get("rivet_used"):
+            owners=sum(forks.active(h,"rivet") for h in party)
+            if owners:
+                taken=taken*(100*len(party)-20*owners)//(100*len(party))
+                r["rivet_used"]=True
+        if taken>=r["hp"] and any(forks.active(h,"reprieve") for h in party):
+            for h in party:
+                if forks.active(h,"reprieve"): h.pop("route_relic",None)
+            taken=max(0,r["hp"]-1)
+            msg+=" Вторая запись сохранила отряду 1 ХП."
         r["hp"] -= taken
         msg += f" Ответный удар — {taken}."
         if r["hp"]<=0:
@@ -533,7 +618,8 @@ def resolve(s,r,viewer=None):
             if "road_level" in r: party[0].pop("coast_trip",None)
             if r.get("legacy_safe"):
                 return reply("Отряд погиб. В этом перенесённом походе потерь нет.\n"+msg)
-            return reply("Отряд погиб. Герои возродились в лагере.\n"+msg+"\n"+"\n".join(death(h) for h in party))
+            lost=" Добыча этого похода потеряна." if r["mode"]!="hunt" else ""
+            return reply("Отряд погиб. Герои возродились в лагере."+lost+"\n"+msg+"\n"+"\n".join(death(h) for h in party))
     r.update(round=r["round"]+1,moves={},used={},heal_requests={},deadline=time.time()+60,log=msg)
     return board(s,r,viewer)
 
@@ -611,7 +697,7 @@ def inventory(h,uid,slot=None,page=0,needed=None,active=None):
                 continue
             stat = h["items"][item][0]
             power = effective_power(h,item)
-            label = f"{item} · +{power} удар" if stat==0 else f"{item} · +{2*power} ХП"
+            label = f"{item} · +{power} удар" if stat==0 else f"{item} · +{power} ХП"
             label += f" · ур. {wear_level(z,k)}"
             if item in ITEM_TRAITS:
                 idx,value=ITEM_TRAITS[item]
@@ -648,6 +734,7 @@ def play(s,uid,name,cmd):
     h = heroes.get(uid)
     p = cmd.split(":")
     op = p[0]
+    if op=="writ" and h: return forks.lots(s,uid,*p[1:3])
     if op=="notes": return collection(h or {},p[1:])
     if op=="lore":
         if len(p)==2 and p[1] in tuple(map(str,range(len(CHAPTERS)))):
@@ -671,7 +758,7 @@ def play(s,uid,name,cmd):
         return reply(f"{CLASSES[h['class']][0]} · ур. {lv}/60\n{xp}\n\nВ бою\n"
                      f"Удар: {bounds(attack(h))[0]}–{bounds(attack(h))[1]} · крит: {crit(h)}% ×{multiplier(h)/100:.2f}\nЗдоровье: {health(h)} · запас энергии: {energy(h)}\n\nХарактеристики\n"+
                      " · ".join(f"{n}: {v}" for n,v in zip(STAT_NAMES,stats(h)))+f"\nСмертей: {h.get('deaths',0)}"+diary,
-                     ([[btn("Общее дело Гусзка","city")]] if op=="diary" else [])+[[btn(f"Навыки · {points(h)} очк.","nav:skills")],[btn("История и умение","bio:"+h["class"])]])
+                     ([[btn("Общее дело Гусзка","city")]]+([[btn("Грамоты походов","writ")]] if h.get("writs") or h.get("writ_news") or any(uid in lot["members"] for lot in s.get("writ_lots",{}).values()) else []) if op=="diary" else [])+[[btn(f"Навыки · {points(h)} очк.","nav:skills")],[btn("История и умение","bio:"+h["class"])]])
     if op=="class" and len(p)==3 and p[2] in CLASSES:
         if uid!=p[1]: return reply("Это чужой лист героя.")
         if h: return reply("Твой герой уже выбрал класс.")
@@ -802,8 +889,34 @@ def play(s,uid,name,cmd):
     if len(p)!=(4 if op=="healok" else 3) or p[2]!=str(r["round"]):
         text,rows=board(s,r,uid)
         return reply("Раунд сменился. Выбери действие для текущего раунда.\n\n"+text,rows)
+    if "exit_votes" in r:
+        votes=r["exit_votes"]
+        if "exit_coin" in r:
+            if op!="coinok": return board(s,r,uid)
+            decision=r.pop("exit_coin")
+        else:
+            if op in ("turnback","faceboss"):
+                votes[uid]=op
+            elif op!="exitfinish" or time.time()<r["deadline"] or not votes:
+                return board(s,r,uid)
+            if len(votes)<len(r["party"]) and op!="exitfinish": return board(s,r,uid)
+            forward=list(votes.values()).count("faceboss")
+            if 2*forward==len(votes):
+                r["exit_coin"]=random.choice(("faceboss","turnback"))
+                return board(s,r,uid)
+            decision="faceboss" if 2*forward>len(votes) else "turnback"
+        if decision=="turnback":
+            haul.bank(s,r)
+            reward=forks.pay(s,r)
+            del fights[r["id"]]
+            for member in r["party"]: heroes[member]["returning_from_fight"]=True
+            return reply(f"Отряд вернулся · {title(r)}\nНаходки очищенных залов перенесены в сумки. Зачистка босса не засчитана."+("\n"+reward if reward else ""))
+        del r["exit_votes"]
+        r.update(deadline=time.time()+60,log="Отряд вошёл в зал босса.")
+        return board(s,r,uid)
+    if op in ("turnback","faceboss","exitfinish","coinok"): return board(s,r,uid)
     if "votes" in r: return vote_route(s,r,uid,op)
-    if op in ROUTES or op=="closevote": return reply("Путь уже выбран.")
+    if op in ROUTES or op in ("closevote","pathok"): return reply("Путь уже выбран.")
     confirmed = op=="healok"
     if confirmed:
         count = heal_count(r)
@@ -821,7 +934,7 @@ def play(s,uid,name,cmd):
                 r.setdefault("heal_requests",{})[uid] = heal_count(r)
                 text,rows = board(s,r,uid)
                 return reply(text+"\nВ этом раунде отряд уже лечили. Потратить ещё одно зелье?",rows)
-            healed = min(r["maxhp"]-r["hp"],city.restore(12+2*level(h) if op=="heal" else 35+3*level(h),city.buff(s)))
+            healed = min(r["maxhp"]-r["hp"],city.restore(12+2*level(h) if op=="heal" else 35+3*level(h),city.buff(s))*(110 if forks.active(h,"cup") else 100)//100)
             r["hp"] += healed
         elif op in SCROLLS:
             if uid in r.get("scroll_users",[]): return reply("Ты уже читал свиток в этом походе.")

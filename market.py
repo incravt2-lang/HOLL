@@ -3,7 +3,7 @@ from cargo import free
 from city import price
 import random
 import time
-from world import trade_value, tier_name,bonus_label,CODE_ITEMS, ITEM_TRAITS, STAT_NAMES, SLOTS, gear_slot, gear_stat
+from world import class_power, trade_value, tier_name,bonus_label,CODE_ITEMS, ITEM_TRAITS, STAT_NAMES, SLOTS, gear_slot, gear_stat
 from world import SEAM_SHIELD, wear_level, level, BANDS, VAULTS, SCRAPS, gear_names, strength
 
 BAGS = ((8,0),(18,40),(36,110),(64,260))
@@ -113,8 +113,8 @@ def market(h,uid,section="town",note="",active=None,needed=None):
         for number,code in enumerate(wares(hour,active),1):
             z,k=map(int,code.split("."))
             item=CODE_ITEMS[code]
-            power=strength(z,k)
-            bonus=f"+{power} к удару" if gear_stat(z,k)==0 else f"+{2*power} к здоровью"
+            power=class_power(h["class"],item,strength(z,k))
+            bonus=f"+{power} к удару" if gear_stat(z,k)==0 else f"+{power} к здоровью"
             if item in ITEM_TRAITS:
                 idx,value=ITEM_TRAITS[item]
                 bonus+=f" · {STAT_NAMES[idx]} +{value}"

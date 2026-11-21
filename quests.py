@@ -12,20 +12,21 @@ KINDS = {
     "raid": "За стеной пропал разъезд. Собери людей и проверь последний зал.",
 }
 
-def rotation(state, now):
+def rotation(state, now, uid):
     shift = int(now) // SHIFT
-    board = state.get("contracts")
+    hero = state["heroes"][uid]
+    board = hero.get("orders_board")
     if board and board["shift"] == shift:
         return board
-    heroes = state["heroes"]
-    average = round(sum(level(h) for h in heroes.values()) / len(heroes))
-    rng = random.Random(f"{shift}:{','.join(sorted(heroes))}")
+    band=(level(hero)-1)//10
+    average=band*10+5
+    rng=random.Random(f"alpha:{shift}:{band}")
     pool = []
     for z, zone in enumerate(ZONES):
         for n in (*range(9),*EXTRA_HUNT_IDS):
             lv = rank(z,n)
             first = n if n in HUNT_IDS else 3 + 3*((n-3)//3)
-            if lv > average+5 or rank(z,first) < average-5:
+            if lv > band*10+10 or rank(z,first) < band*10+1:
                 continue
             for kind in ("hunt","supply"):
                 pool.append((kind,z,n,rng.randint(2,4)))
@@ -43,18 +44,17 @@ def rotation(state, now):
     chosen.extend(pool[:count-len(chosen)])
     board = {"shift":shift,"level":average,"jobs":[dict(kind=t,z=z,n=n,need=v,progress=0,owner=None,done=False)
                                                   for t,z,n,v in chosen]}
-    state["contracts"] = board
+    hero["orders_board"] = board
     return board
 
 def record_win(state,party,z,n,mode):
-    board = state.get("contracts")
-    if not board or board["shift"] != int(time.time())//SHIFT:
-        return
-    for job in board["jobs"]:
-        if job["done"] or job["owner"] not in party or (job["z"],job["n"])!=(z,n):
-            continue
-        if job["kind"]=="hunt" or (job["kind"]=="raid" and mode=="raid"):
-            job["progress"] = min(job["need"],job["progress"]+1)
+    for uid in party:
+        board=state["heroes"][uid].get("orders_board",{})
+        if board.get("shift")!=int(time.time())//SHIFT:continue
+        for job in board["jobs"]:
+            if job["done"] or job["owner"]!=uid or (job["z"],job["n"])!=(z,n):continue
+            if job["kind"]=="hunt" or (job["kind"]=="raid" and mode=="raid"):
+                job["progress"]=min(job["need"],job["progress"]+1)
 
 def details(q):
     z,n,kind = q["z"],q["n"],q["kind"]
@@ -66,7 +66,12 @@ def details(q):
         label = f"Доставить · {SCRAPS[z][n]} ×{q['need']}"
     hard = kind=="raid" or n not in HUNT_IDS
     xp = (28+rank(z,n)*3)*(3 if kind=="raid" else 2 if hard else 1)
+    xp *= 3 if kind=="raid" else q["need"]
     return label,xp,(15 if kind=="raid" else 7 if hard else 2)
+
+def copper(q):
+    effort = 5 if q["kind"]=="raid" else q["need"]
+    return (3 + rank(q["z"],q["n"])//3)*effort
 
 def progress(q,h):
     if q["kind"]=="supply":
@@ -78,6 +83,7 @@ def payout(q,h,active=None):
     _,xp,rare=details(q)
     xp=min(city.earned(xp,active,h),LIMITS[-1]-h["xp"])
     h["xp"]+=xp
+    h["wallet"]+=copper(q)
     h["peak"]=max(level(h),h.get("peak",1))
     tier=int(random.randrange(100)<rare)
     names=gear_names(z)
@@ -91,11 +97,11 @@ def payout(q,h,active=None):
     else:
         h["items"][item]=[gear_stat(z,k),strength(z,k)]
         award=f"[{category(z,k)}] "+tier_name(z,k)+" · "+item
-    return f"Комендант поставил печать. +{xp} опыта · {award}"
+    return f"Комендант поставил печать. +{xp} опыта · +{copper(q)} мед. · {award}"
 
 def desk(state,uid,args):
     now=time.time()
-    board=rotation(state,now)
+    board=rotation(state,now,uid)
     shift=board["shift"]
     jobs=board["jobs"]
     h=state["heroes"][uid]
@@ -132,7 +138,7 @@ def desk(state,uid,args):
                         "changed":"В списке дворов он ещё числится живым. Дозор подтверждает следы Плети."}
                 text=[label+"\n",orders.get(faction(z,n),KINDS[q["kind"]]),"\nГде искать\n"+site+f" · ур. {rank(z,n)}"]
                 if q["kind"]=="supply": text.append("Источник: "+monster(z,n))
-                text.append(f"\nНаграда\n{xp} опыта и вещь · редкая {rare}%, иначе обычная.")
+                text.append(f"\nНаграда\n{xp} опыта, {copper(q)} мед. и вещь · редкая {rare}%, иначе обычная.")
                 rows=[]
                 if q["owner"] is None: rows.append(button("Взять поручение",prefix+"take"))
                 elif q["owner"]==uid:
@@ -146,7 +152,7 @@ def desk(state,uid,args):
     minutes=max(1,int(((shift+1)*SHIFT-now+59)//60))
     text=["Комендант Гусзка · караульная книга",
           "«Пока амбары полны, ворота держатся. Бери запись — и распишись по возвращении».",
-          f"Средний уровень: {board['level']} · до смены доски {minutes//60} ч {minutes%60} мин."]
+          f"Доска уровней {(board['level']-1)//10*10+1}–{(board['level']-1)//10*10+10} · до смены доски {minutes//60} ч {minutes%60} мин."]
     if note: text.append(note)
     rows=[]
     for i,q in enumerate(jobs):

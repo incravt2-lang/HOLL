@@ -1,11 +1,12 @@
 """Personal coastal journeys and commissions. Stored inside the campaign transaction."""
 import city
+import forks
 import random
 import secrets
 import time
 
 from market import asking_price
-from quests import SHIFT, details, progress
+from quests import copper, SHIFT, details, progress
 from world import category, SEAM_SHIELD, encounter_area, BANDS, CLASS_PIECES, HUNT_IDS, SCRAPS, SLOTS, ZONES, faction, gear_stat, level, monster, rank, strength, tier_name
 
 MASTERS={"veya":"Шорница Вея","hariton":"Оружейник Харитон"}
@@ -58,7 +59,7 @@ def journal(s,uid):
     h=s["heroes"][uid]
     lines=["Поручения коменданта"]
     active=city.buff(s)
-    b=s.get("contracts",{})
+    b=s["heroes"][uid].get("orders_board",{})
     if b.get("shift")==int(time.time())//SHIFT:
         for q in b["jobs"]:
             if q["owner"]==uid and not q["done"]:
@@ -66,10 +67,14 @@ def journal(s,uid):
                 xp=city.earned(xp,active,h)
                 if len(lines)>1: lines.append("")
                 source=source_line(q["z"],q["n"])
-                lines.append(f"{label} · {progress(q,h)}/{q['need']}\n   {source}\nНаграда: {xp} опыта и вещь · редкая {rare}%, иначе обычная.")
+                lines.append(f"{label} · {progress(q,h)}/{q['need']}\n   {source}\nНаграда: {xp} опыта, {copper(q)} мед. и вещь · редкая {rare}%, иначе обычная.")
     if len(lines)==1: lines.append("Действующих поручений нет.")
     q=city.current(s)
     lines.append("\nОбщее дело Гусзка\n"+city.PROJECTS[q["kind"]][0]+"\n"+city.summary(q))
+    relic=h.get("route_relic")
+    if relic and forks.active(h,relic):
+        lines.append(f"\n{forks.RELICS[relic]} · осталось {int((h['route_until']-time.time()+59)//60)} мин.")
+    if h.get("safe_trail"):lines.append("Известна тропа для обхода одной засады.")
     lines.append("\nРемесленники лагеря")
     for m,o in h.get("commissions",{}).items():
         lines.append("\n"+MASTERS[m]+"\n"+describe(h,o,active))
@@ -84,8 +89,11 @@ def road(h,args):
     if len(args)==2 and args==[trip["id"],str(trip["step"])] and trip["step"]<3 and not trip.get("waiting"):
         trip["step"]+=1
         if trip["step"]==trip["ambush"]: trip["waiting"]=True
+    if trip.get("waiting") and args==[trip["id"],"bypass"] and h.pop("safe_trail",False):
+        trip["waiting"]=False
     if trip.get("waiting"):
-        return "Поперёк дороги лежит подвода. Из-под брезента поднимается вооружённый человек. Засада!",[row("Принять бой","roadfight:"+trip["id"]),row("Отступить в Гусзк","nav:town")]
+        bypass=[row("Обойти по тропе","road:"+trip["id"]+":bypass")] if h.get("safe_trail") else []
+        return "Поперёк дороги лежит подвода. Из-под брезента поднимается вооружённый человек. Засада!",[row("Принять бой","roadfight:"+trip["id"]),row("Отступить в Гусзк","nav:town")]+bypass
     if trip["step"]==3:
         return ROAD[2][1]+"\nЛагерь разведчиков «У моря»", [row(name,"craft:"+m) for m,name in MASTERS.items()]+([row("Мастер · пряжки Кожевен","spoils")] if h.get("buckles") else [])+[row("Вернуться в Гусзк","nav:town")]
     label,text=ROAD[trip["step"]-1] if trip["step"] else ("За городскими воротами","До лагеря разведчиков три перехода.")
@@ -100,6 +108,24 @@ def craft(h,args,active=None):
     now=int(time.time());timers=h.setdefault("craft_ready",{});wait=max(0,timers.get(m,0)-now)
     back=row("К мастеру",prefix)
     note=""
+    writs=h.get("writs",{})
+    if len(args) in (3,4) and args[1]=="writ" and writs.get(args[2]) in (m,"guild"):
+        ticket=args[2]
+        if len(args)==3:
+            return "Грамота покрывает работу и материалы. Выбери ячейку.",[row(SLOTS[i],prefix+":writ:"+ticket+":"+str(i)) for i in SLOTS_BY_MASTER[m]]+[back]
+        if args[3].isdigit() and int(args[3]) in SLOTS_BY_MASTER[m]:
+            pool=[p for p in candidates(h,int(args[3])) if CLASS_PIECES[p][0] not in h["items"]]
+            if wait:note="Мастер ещё занят. Грамота остаётся у тебя."
+            elif not pool:note="Все варианты этой ячейки уже есть. Грамота остаётся у тебя."
+            else:
+                tier=int(random.random()<0.2)
+                z,k=random.choice([p for p in pool if CLASS_PIECES[p][3]==tier] or pool)
+                item=CLASS_PIECES[z,k][0]
+                h["items"][item]=[gear_stat(z,k),strength(z,k)]
+                del writs[ticket]
+                timers[m]=now+900
+                wait=900
+                note="Получено по грамоте: "+item
     if len(args)==3 and args[1] in ("preview","take") and args[2].isdigit() and int(args[2]) in SLOTS_BY_MASTER[m] and not order:
         slot=int(args[2])
         if args[1]=="preview":
@@ -142,4 +168,5 @@ def craft(h,args,active=None):
     else:
         lines.append("Выбери ячейку для изделия. Оба кольца подходят для любой кольцевой ячейки.")
         rows=[row(SLOTS[i] if i!=7 else "Кольцо",prefix+":preview:"+str(i)) for i in SLOTS_BY_MASTER[m]]
+    rows.extend(row("Предъявить грамоту",prefix+":writ:"+k) for k,v in writs.items() if v in (m,"guild"))
     return "\n".join(lines),rows+[row("К кострам","road")]

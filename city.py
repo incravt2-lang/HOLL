@@ -97,7 +97,7 @@ def complete(q):
         return "Городское дело завершено! "+PROJECTS[kind][2]+" · 24 часа."
     return ""
 
-def victory(s,party,z,n,mode):
+def victory(s,party,z,n,mode,fight=None):
     q=current(s)
     if q["until"]: return ""
     kind=q["kind"]
@@ -109,6 +109,9 @@ def victory(s,party,z,n,mode):
         elif kind in DELIVER:
             if q["counts"][i]>=need: continue
             for uid in party:
+                if fight is not None:
+                    fight.setdefault("city_finds",[]).append([q["seq"],uid,i])
+                    continue
                 bag=q["cargo"].setdefault(uid,[0,0,0])
                 bag[i]=min(need-q["counts"][i],bag[i]+1)
             return f"[Задания] Для коменданта: {label}. Доставьте находку в город."

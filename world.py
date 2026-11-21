@@ -425,15 +425,27 @@ def trade_value(z,k):
     tier=RARITY[z,k]
     return base_strength(z,k)*(4+tier)//4+tier
 
+# Primary bonuses are stored in displayed units (HP or attack).
+# Each ten-level band improves every slot; heavy pieces also improve at mid-band.
+SLOT_HP = (2, 5, 4, 2, 4, 2, 2, 2, 2, 3, 2, 2, 4, 3, 2)
 def strength(z,k):
-    tier = RARITY[z,k]
     slot = gear_slot(z,k)
+    tier = RARITY[z,k]
+    level_offset = wear_level(z,k)-1
+    item = gear_names(z)[k]
     if slot == RIGHT:
-        return base_strength(z,k) + tier//2
-    armour = 2 if slot in (1,2,4,12) or ARM_BY_NAME.get(gear_names(z)[k],(None,None))[1]=="Щит" else 1
-    return armour + BANDS[z]//2 + tier//2
+        power = 4 + level_offset//5 + tier//2
+        return power*2 if two_handed(item) else power
+    shield = ARM_BY_NAME.get(item,(None,None))[1] in ("Щит","Баклер")
+    if shield or slot == 1:
+        return (4 if shield else SLOT_HP[slot]) + level_offset//5 + tier//2
+    return SLOT_HP[slot] + level_offset//10 + tier//2
 
-# Primary power rises on even tiers; the role-specific bonus rises on odd tiers.
+def class_power(cls,item,power):
+    if item in ARM_BY_NAME and ARM_BY_NAME[item][0]!=cls:
+        return max(1,power//2)
+    return power
+
 # Outfit attributes follow the part of the body the item protects.
 OUTFIT_ATTRIBUTE = (3,2,2,3,0,2,1,3,3,2,2,1,2,1,3,0)
 ITEM_TRAITS = {name:(OUTFIT_ATTRIBUTE[slot],1+BANDS[z]//3+RARITY[z,outfit_start(z)+idx]//4)
