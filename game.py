@@ -526,7 +526,7 @@ def area(mode,z,h,half=0):
         return reply(f"{VAULTS[z][0]} · ур. {rank(z,9)}–{rank(z,11)}\nКлючей: {h['keys'].get(str(z),0)} · ключи продаются в городе\nСнаряжение за босса: 50%. Возможные находки: "+", ".join(gear_names(z)[k] for k in loot_slots(z,11,h["class"])),
                      [[btn("Подготовиться ко входу",f"new:vault:{z}:0")]])
     if mode=="zones":
-        return reply(f"{name} · уровни {low}–{low+4}\n{ZONE_NOTES[z]}\nОхота: {', '.join(monster(z,n) for n in hunts)}\nПодземелье: {raids[half][0]}",
+        return reply(f"{name} · уровни {low}–{low+4}\n{ZONE_NOTES[name]}\nОхота: {', '.join(monster(z,n) for n in hunts)}\nПодземелье: {raids[half][0]}",
                      [[btn("Охота",f"area:hunt:{z}:{half}"),btn("Подземелья",f"area:raid:{z}:{half}")]]+([[btn(VAULTS[z][0],f"area:vault:{z}:1")]] if z in VAULTS and half else []))
     if mode=="hunt":
         rows = [[btn(f"{monster(z,j)} · ур. {rank(z,j)}",f"new:hunt:{z}:{j}")] for j in sorted(hunts,key=lambda n:rank(z,n))]
