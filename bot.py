@@ -133,7 +133,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         if mine: rows.insert(0,[btn("Вернуться в поход","nav:current")])
     elif cmd=="codex":
         msg="Кодекс"
-        rows=[[btn("Хроника","nav:lore"),btn("Бестиарий","nav:book"),btn("Правила","nav:help")]]
+        rows=[[btn("Хроника","nav:lore"),btn("Бестиарий","nav:book"),btn("Правила","nav:help")],[btn("Найденные записки","nav:notes")]]
     elif cmd=="dungeons":
         msg="Подземелья"
         rows=[[btn("Групповые","nav:raid"),btn("Одиночные","nav:vault")]]
@@ -152,7 +152,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     elif cmd in ("teams","current") and mine:
         msg,rows = board(state,mine,uid)
     else:
-        msg,rows = play(state,uid,name,"hero" if uid not in heroes and op not in ("class","bio","help","lore") else cmd)
+        msg,rows = play(state,uid,name,"hero" if uid not in heroes and op not in ("class","bio","help","lore","notes") else cmd)
     ended = battle_id and before and battle_id not in fights
     if ended and old_round:
         for who in before: heroes[who]["last_result"] = msg
@@ -177,6 +177,8 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         result["art"] = fight_picture(previous)
         for who in before:
             heroes[who]["report_art"] = result["art"]
+    elif op=="city" and uid in heroes:
+        result["art"]="city_"+state["city_project"]["kind"]
     elif viewing:
         result["art"] = fight_picture(mine)
     else:
@@ -218,6 +220,7 @@ def screen_picture(command, hero):
     if op=="band" and args: return {"raid":"raid","vault":"vault","book":"book"}.get(args[0],"world")
     if op=="craft": return "coast_veya" if args[:1]==["veya"] else "coast_hariton"
     if op=="road": return "coast_road"
+    if op=="notes": return "lore"
     if op=="codex": return "book"
     if op=="dungeons": return "raid"
     if op == "bio" and args:
@@ -230,7 +233,7 @@ def screen_picture(command, hero):
         mode, zone = args[:2]
         if mode!="vault" and args[2:]==["1"]: return "upper_"+zone
         return ("vault_" if mode=="vault" else "zone_") + zone
-    if op == "entry" and len(args)==2 and args[1].isdigit():
+    if op in ("entry","loot") and len(args)==2 and args[1].isdigit():
         zone, index = args[0], int(args[1])
         if index in HUNT_IDS:
             return f"beast_{zone}_{index}"
@@ -336,6 +339,8 @@ def process(db, update, username):
 
 def combat_entities(text):
     patterns = (
+        ("bold", r"^(?:[1-4]\. .+|Лавка Мартина|Аптека Лады|Писец Тиш|В бою|Характеристики|Поручения коменданта|Ремесленники лагеря|Материалы|Где искать|Награда|Добыча)$"),
+        ("bold", r"^([0-9]+ мед\.)  ·"),
         ("bold", r"^.+ · раунд [0-9]+$"),
         ("bold", r"^.+ · ур\. [0-9]+ · ([0-9]+ ХП)$"),
         ("italic", r"^(?:Разбег|Предсмертный рывок|Твёрдый нарост|Засада|Караульная стойка|Судорога Плети|Счёт недостачи) · (.+)$"),

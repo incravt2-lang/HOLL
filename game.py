@@ -1,6 +1,7 @@
-from world import trade_value
+from world import is_humanoid, trade_value
 """Rules for one group's campaign. All identifiers in saved JSON are strings."""
 import random
+import city
 import secrets
 import time
 
@@ -83,9 +84,10 @@ from world import area_name, encounter_area, encounter_trait, faction, HUNT_IDS,
 from world import LEFT, RIGHT, two_handed, ARM_BY_NAME, ARMS, arm_start
 from world import SLOTS, SLOT_ORDER, RINGS, gear_slot, gear_stat, original_count
 from quests import desk, record_win
+from notes import collection, find_note
 from coast import craft, journal, road
 from barter import exchange
-from market import CURIOS, HEALS, REQUIREMENT, SCROLLS, equipment_chance, POTIONS, capacity, units, setup, market, trade, collect, scrap_value
+from market import CURIOS, HEALS, REQUIREMENT, SCROLLS, equipment_chance, POTIONS, capacity, units, setup, market, trade, collect, scrap_value, scrap_payment
 
 from chronicle import TITLE, CHAPTERS, ZONE_NOTES
 from world import CLASS_PIECES, OLD_CODES, CODE_ITEMS, ITEM_CODES, RARITY, TIERS, TIER_WEIGHTS, loot_slots, tier_name
@@ -323,13 +325,15 @@ def roll_equipment(z,n,mode,cls=None):
     tier=random.choices(range(5),weights=TIER_WEIGHTS[mode])[0]
     return random.choice([k for k in loot_slots(z,n,cls) if RARITY[z,k]==tier])
 
+COIN_CHANCE = 0.35
+
 def loot_description(z,n,mode,cls=None):
-    lines=[]
+    lines = []
     for tier,weight in enumerate(TIER_WEIGHTS[mode]):
-        names=", ".join(gear_names(z)[k] for k in loot_slots(z,n,cls) if RARITY[z,k]==tier)
+        names="\n".join("• "+gear_names(z)[k] for k in loot_slots(z,n,cls) if RARITY[z,k]==tier)
         pct=f"{equipment_chance(mode,n)*weight/10:.3f}".rstrip("0").rstrip(".").replace(".",",")
-        lines.append(f"{TIERS[tier]} · {pct}% · {names}")
-    return "\n".join(lines)
+        lines.append(f"{TIERS[tier]} · {pct}%\n{names}")
+    return "\n\n".join(lines)
 
 def resolve(s,r,viewer=None):
     z,n = r["z"],target(r)
@@ -346,7 +350,7 @@ def resolve(s,r,viewer=None):
         cap = energy(h)
         stamina[i] = min(cap,stamina.get(i,cap)+(-4 if a=="skill" else 3 if a=="block" else 1))
         effects = r.get("buffs",{}).get(i,{})
-        if effects.get("regen",0)>=r["round"]: heal += 4+lv//3
+        if effects.get("regen",0)>=r["round"]: heal += city.restore(4+lv//3,city.buff(s))
         if effects.get("venom",0)>=r["round"]: poisons[i] = 6+lv//3
         if effects.get("iron",0)>=r["round"]: shield += 12+lv
         elif effects.get("ward",0)>=r["round"]: shield += 5+lv//2
@@ -395,8 +399,15 @@ def resolve(s,r,viewer=None):
     msg = f"{summary}\nОтряд нанёс {dmg} урона."
     if r["enemy"]<=0:
         record_win(s,r["party"],z,n,r["mode"])
-        scraps = []
+        city_news = city.victory(s,r["party"],z,n,r["mode"])
+        scraps = [city_news] if city_news else []
         for h in party:
+            if is_humanoid(z,n) and random.random() < COIN_CHANCE:
+                copper = random.randint(1, 3)
+                h["wallet"] += copper
+                scraps.append(f"{h['name']}: +{copper} мед.")
+            note=find_note(h,z,n,r["mode"])
+            if note: scraps.append(f"{h['name']}: записка «{note}» · сохранена в Кодексе")
             piece = collect(h,z,n,random.random())
             if piece: scraps.append(f"{h['name']}: {piece}")
             if random.random()<equipment_chance(r["mode"],n):
@@ -421,7 +432,7 @@ def resolve(s,r,viewer=None):
             for h in party:
                 lv = level(h)
                 base = (16+min(enemy_lv,lv+4)*2)*(1 if r["mode"]=="hunt" else 3)
-                xp = min(LIMITS[-1]-h["xp"],max(1,27*base//(10*(1+max(0,lv-enemy_lv-4)))))
+                xp = min(LIMITS[-1]-h["xp"],city.earned(max(1,27*base//(10*(1+max(0,lv-enemy_lv-4)))),city.buff(s)))
                 h["xp"] += xp
                 h["peak"] = max(level(h),h.get("peak",1))
                 up = f" · уровень {level(h)}!" if level(h)>lv else ""
@@ -433,8 +444,9 @@ def resolve(s,r,viewer=None):
                     h["junk"]["6.98"]=h["junk"].get("6.98",0)+1
                     scraps.append(h["name"]+": связка выделанных шкур")
                 else:
-                    h["wallet"]+=12
-                    scraps.append(h["name"]+": шкуры проданы за 12 мед. (сумка полна)")
+                    payment,h["sale_tenths"]=scrap_payment(h,12,city.buff(s))
+                    h["wallet"]+=payment
+                    scraps.append(f"{h['name']}: шкуры проданы за {payment} мед. (сумка полна)")
         if r.get("route")=="loft" and r["room"]==1:
             r["cut_chain"]=True
             msg+=" Отряд сорвал цепь с балки."
@@ -462,6 +474,11 @@ def resolve(s,r,viewer=None):
         if r.pop("cut_chain",False):
             taken=0
             msg+=" Мастер дёрнул крюк. Оборванная цепь рухнула на пол."
+        if taken and r.get("first_hit_room")!=r["room"]:
+            r["first_hit_room"]=r["room"]
+            if city.buff(s)=="papers":
+                taken=taken*85//100
+                msg+=" Караульный строй смягчил первый удар."
         r["hp"] -= taken
         msg += f" Ответный удар — {taken}."
         if r["hp"]<=0:
@@ -579,6 +596,7 @@ def play(s,uid,name,cmd):
     h = heroes.get(uid)
     p = cmd.split(":")
     op = p[0]
+    if op=="notes": return collection(h or {},p[1:])
     if op=="lore":
         if len(p)==2 and p[1] in tuple(map(str,range(len(CHAPTERS)))):
             heading,body = CHAPTERS[int(p[1])]
@@ -598,10 +616,10 @@ def play(s,uid,name,cmd):
         lv = level(h)
         xp = "Достигнут предел уровней." if lv==60 else f"До уровня {lv+1}: {LIMITS[lv]-h['xp']} опыта."
         diary="\n\n"+journal(s,uid) if op=="diary" else ""
-        return reply(f"{name} · {CLASSES[h['class']][0]} · ур. {lv}/60\n{xp}\n"
-                     f"Удар: {bounds(attack(h))[0]}–{bounds(attack(h))[1]} · крит: {crit(h)}% ×{multiplier(h)/100:.2f}\nЗдоровье: {health(h)} · запас энергии: {energy(h)}\n"+
+        return reply(f"{CLASSES[h['class']][0]} · ур. {lv}/60\n{xp}\n\nВ бою\n"
+                     f"Удар: {bounds(attack(h))[0]}–{bounds(attack(h))[1]} · крит: {crit(h)}% ×{multiplier(h)/100:.2f}\nЗдоровье: {health(h)} · запас энергии: {energy(h)}\n\nХарактеристики\n"+
                      " · ".join(f"{n}: {v}" for n,v in zip(STAT_NAMES,stats(h)))+f"\nСмертей: {h.get('deaths',0)}"+diary,
-                     [[btn(f"Навыки · {points(h)} очк.","nav:skills")],[btn("История и умение","bio:"+h["class"])]])
+                     ([[btn("Общее дело Гусзка","city")]] if op=="diary" else [])+[[btn(f"Навыки · {points(h)} очк.","nav:skills")],[btn("История и умение","bio:"+h["class"])]])
     if op=="class" and len(p)==3 and p[2] in CLASSES:
         if uid!=p[1]: return reply("Это чужой лист героя.")
         if h: return reply("Твой герой уже выбрал класс.")
@@ -613,7 +631,7 @@ def play(s,uid,name,cmd):
     if op in ("road","roadfight","craft"):
         if mine: return board(s,mine,uid)
         if op=="road": return road(h,p[1:])
-        if op=="craft": return craft(h,p[1:])
+        if op=="craft": return craft(h,p[1:],city.buff(s))
         trip=h.get("coast_trip",{})
         if not trip.get("waiting") or p[1:]!=[trip.get("id")]: return reply("Засада уже позади.")
         z,n=min(((z,n) for z in range(len(ZONES)) for n in HUNT_IDS if faction(z,n) in ("robber","oath")),
@@ -632,6 +650,7 @@ def play(s,uid,name,cmd):
                 h["peak"]=max(level(h),h.get("peak",1))
                 values[j]+=1
         return training(h,uid)
+    if op=="city": return city.card(s,uid,p[1:],busy=bool(mine))
     if op=="orders":
         if mine and mine["round"]: return reply("Комендант ждёт тебя в городе после боя.")
         return desk(s,uid,p[1:])
@@ -639,8 +658,8 @@ def play(s,uid,name,cmd):
         if mine and mine["round"]: return reply("Ты в бою. Прилавки откроются после возвращения.")
         if op=="town":
             h.pop("coast_trip",None)
-            return market(h,uid)
-        return trade(h,uid,p)
+            return market(h,uid,active=city.buff(s))
+        return trade(h,uid,p,city.buff(s))
     if op=="barter": return exchange(s,uid,cmd)
     if op=="bag": return inventory(h,uid)
     if op in ("slot","off","dress") and len(p)>=3 and p[1]==uid and p[2] in tuple(map(str,range(len(SLOTS)))):
@@ -668,16 +687,17 @@ def play(s,uid,name,cmd):
         z=int(p[2])
         text,rows=area(p[1],z,h,int(p[3]) if len(p)==4 else int(p[1]=="vault"))
         return text,rows+[[btn("‹ К локациям",f"band:{p[1]}:{BANDS[z]}")]]
-    if op=="entry" and len(p)==3 and p[1] in DIGITS and p[2] in tuple(map(str,range(16))):
+    if op in ("entry","loot") and len(p)==3 and p[1] in DIGITS and p[2] in tuple(map(str,range(16))):
         z,n = map(int,p[1:])
         zone = ZONES[z]
         if 9<=n<12 and z not in VAULTS: return reply("Эта запись недоступна.")
         mode = "hunt" if n in HUNT_IDS else "vault" if n>=9 else "raid"
         origin = VAULTS[z][0] if mode=="vault" else "Охота" if mode=="hunt" else zone[2][(n-3)//3][0]
-        loot = loot_description(z,n,mode,h["class"])
-        return reply(f"{monster(z,n)} · ур. {rank(z,n)}\n{encounter_area(z,n)} · {origin}\n{encounter_trait(z,n)[0]}: {encounter_trait(z,n)[1]}\n"
+        if op=="loot":
+            return reply("Снаряжение · "+monster(z,n)+"\n\n"+loot_description(z,n,mode,h["class"]),[[btn("‹ К противнику",f"entry:{z}:{n}")]])
+        return reply(f"{monster(z,n)} · ур. {rank(z,n)}\n{encounter_area(z,n)} · {origin}\n\n{encounter_trait(z,n)[0]}: {encounter_trait(z,n)[1]}\n"
                      f"Победы: {h.get('book',{}).get(f'{z}.{n}',0)}\n" +
-                     f"Хлам: {SCRAPS[z][n]} · {scrap_value(z,n)} мед.\nРедкость: {CURIOS[z]} · 6%\n" + ("За охоту" if mode=="hunt" else f"Зал {n%3+1}") + f" · шанс снаряжения {equipment_chance(mode,n):.0%}\n"+loot,[[btn("Назад",f"area:book:{z}:{int((rank(z,n)-1)%10>=5)}")]])
+                     f"\nДобыча\nХлам: {SCRAPS[z][n]} · {scrap_value(z,n)} мед.\nРедкость: {CURIOS[z]} · 6%\n" + (f"Монеты: 1–3 мед. · {COIN_CHANCE:.0%}\n" if is_humanoid(z,n) else "") + ("За охоту" if mode=="hunt" else f"Зал {n%3+1}") + f" · шанс снаряжения {equipment_chance(mode,n):.0%}",[[btn("Список снаряжения",f"loot:{z}:{n}")],[btn("Назад",f"area:book:{z}:{int((rank(z,n)-1)%10>=5)}")]])
     if op=="new" and len(p)==4 and p[1] in ("hunt","raid","vault") and p[2] in DIGITS:
         if mine: return board(s,mine,uid)
         mode = p[1]
@@ -735,7 +755,7 @@ def play(s,uid,name,cmd):
                 r.setdefault("heal_requests",{})[uid] = heal_count(r)
                 text,rows = board(s,r,uid)
                 return reply(text+"\nВ этом раунде отряд уже лечили. Потратить ещё одно зелье?",rows)
-            healed = min(r["maxhp"]-r["hp"],(12+2*level(h)) if op=="heal" else (35+3*level(h)))
+            healed = min(r["maxhp"]-r["hp"],city.restore(12+2*level(h) if op=="heal" else 35+3*level(h),city.buff(s)))
             r["hp"] += healed
         elif op in SCROLLS:
             if uid in r.get("scroll_users",[]): return reply("Ты уже читал свиток в этом походе.")

@@ -126,6 +126,22 @@ HUMAN_TRAITS = {
 def faction(z,n):
     return HUMAN_HUNTS[z][n-14][2] if n in HUMAN_IDS else None
 
+# Existing encounter IDs by zone, including dungeon and vault inhabitants.
+HUMANOID_ENCOUNTERS = (
+    {3, 5, 7, 8},
+    {3, 4, 5, 6, 7},
+    {1, 2, 3, 4, 5, 6, 7, 8},
+    {3, 5, 7, 8},
+    {3, 4, 5, 6, 7, 8},
+    {2, 3, 4, 5, 6, 7, 8},
+    {3, 4, 5, 6, 7, 8},
+    {2, 3, 4, 5, 7, 8, 9, 10, 11},
+    {4, 6, 7, 8, 9, 10, 11},
+)
+
+def is_humanoid(z, n):
+    return n in HUMAN_IDS or n in HUMANOID_ENCOUNTERS[z]
+
 def encounter_trait(z,n):
     return HUMAN_TRAITS.get(faction(z,n),TRAITS[n%3])
 

@@ -1,4 +1,5 @@
 """City contracts shared by the heroes of one Telegram group."""
+import city
 import random
 import time
 
@@ -72,10 +73,10 @@ def progress(q,h):
         return min(q["need"],h["junk"].get(f"{q['z']}.{q['n']}",0))
     return q["progress"]
 
-def payout(q,h):
+def payout(q,h,active=None):
     z=q["z"]
     _,xp,rare=details(q)
-    xp=min(xp,LIMITS[-1]-h["xp"])
+    xp=min(city.earned(xp,active),LIMITS[-1]-h["xp"])
     h["xp"]+=xp
     h["peak"]=max(level(h),h.get("peak",1))
     tier=int(random.randrange(100)<rare)
@@ -117,10 +118,11 @@ def desk(state,uid,args):
                     key=f"{q['z']}.{q['n']}"
                     h["junk"][key]-=q["need"]
                     if not h["junk"][key]: del h["junk"][key]
-                note=payout(q,h)
+                note=payout(q,h,city.buff(state))
                 q["done"]=True
             if not q["done"]:
                 label,xp,rare=details(q)
+                xp=city.earned(xp,city.buff(state))
                 z,n=q["z"],q["n"]
                 site=encounter_area(z,n)
                 if n not in HUNT_IDS: site+=" · "+ZONES[z][2][(n-3)//3][0]
@@ -128,9 +130,9 @@ def desk(state,uid,args):
                         "oath":"Старый караульный список сходится. Беглец снова берёт пошлину оружием.",
                         "cult":"У амбара опять собирают десятину в чашу без дна. Разберись со сборщиками.",
                         "changed":"В списке дворов он ещё числится живым. Дозор подтверждает следы Плети."}
-                text=[label,orders.get(faction(z,n),KINDS[q["kind"]]),site+f" · ур. {rank(z,n)}"]
+                text=[label+"\n",orders.get(faction(z,n),KINDS[q["kind"]]),"\nГде искать\n"+site+f" · ур. {rank(z,n)}"]
                 if q["kind"]=="supply": text.append("Источник: "+monster(z,n))
-                text.append(f"Награда: {xp} опыта и вещь · редкая {rare}%, иначе обычная.")
+                text.append(f"\nНаграда\n{xp} опыта и вещь · редкая {rare}%, иначе обычная.")
                 rows=[]
                 if q["owner"] is None: rows.append(button("Взять поручение",prefix+"take"))
                 elif q["owner"]==uid:
@@ -152,4 +154,6 @@ def desk(state,uid,args):
         mark="◆ " if q["owner"]==uid else "🔒 " if q["owner"] else ""
         rows.append(button(mark+details(q)[0],f"orders:{shift}:{i}:view"))
     if not rows: text.append("Все записи погашены. Новые прибьют со сменой караула.")
+    project=city.current(state)
+    rows.insert(0,button("Общее дело · "+city.PROJECTS[project["kind"]][0],"city"))
     return "\n\n".join(text),rows+[button("К торговой площади","nav:town")]
