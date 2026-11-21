@@ -32,6 +32,7 @@ class ApiError(Exception):
         super().__init__(description)
 
 ART_DIR = Path(__file__).with_name("art")
+ANIMATED_SCENES = {"gate", "raid", "commandant"}
 FILE_IDS = {}
 
 @lru_cache(maxsize=1)
@@ -40,7 +41,7 @@ def packed_art():
     return zipfile.Path(archive) if archive.is_file() else None
 
 def picture_file(art):
-    name=art+".jpg"
+    name=art if art.endswith(".mp4") else art+".jpg"
     local=ART_DIR/name
     if local.is_file(): return local
     pack=packed_art()
@@ -57,7 +58,9 @@ def api(method, upload=None, **data):
         for key,value in data.items():
             field = value if isinstance(value,str) else json.dumps(value,ensure_ascii=False)
             chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{field}\r\n'.encode())
-        chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="picture"; filename="card.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'.encode())
+        filename = upload.name
+        mime = "video/mp4" if filename.endswith(".mp4") else "image/jpeg"
+        chunks.append(f'--{boundary}\r\nContent-Disposition: form-data; name="picture"; filename="{filename}"\r\nContent-Type: {mime}\r\n\r\n'.encode())
         chunks.extend((upload.read_bytes(),f'\r\n--{boundary}--\r\n'.encode()))
         payload = b"".join(chunks)
         content_type = "multipart/form-data; boundary="+boundary
@@ -403,6 +406,8 @@ def deliver_card(r):
     target = r.get("target") if "slot" in r else (r["message"] if r["cb"] else None)
     if edit_only and not target: return
     art = r.get("art") or ("world" if r.get("previous_art") else None)
+    if art in ANIMATED_SCENES and picture_file(art+".mp4").is_file():
+        art += ".mp4"
     if target and r.get("previous_art") and (not art or not picture_file(art).is_file()):
         art=r["previous_art"]
     if art and (picture_file(art).is_file() or (target and art==r.get("previous_art"))):
@@ -424,14 +429,15 @@ def deliver_card(r):
                 if art==r.get("previous_art"):
                     api("editMessageCaption",message_id=target,caption=pages[page],**photo_args)
                 else:
-                    photo_request("editMessageMedia",art,pages[page],message_id=target,**photo_args)
+                    media_request("editMessageMedia",art,pages[page],message_id=target,**photo_args)
                 return target
             except ApiError as exc:
                 if "message is not modified" in str(exc): return target
                 if edit_only: raise
                 if exc.code!=400 or not any(term in str(exc).lower() for term in ("message to edit not found","can't be edited")): raise
         if r.get("thread"): photo_args["message_thread_id"]=r["thread"]
-        return photo_request("sendPhoto",art,pages[page],disable_notification=True,**photo_args)["message_id"]
+        method = "sendAnimation" if art.endswith(".mp4") else "sendPhoto"
+        return media_request(method,art,pages[page],disable_notification=True,**photo_args)["message_id"]
     if target:
         try:
             api("editMessageText",message_id=target,**args)
@@ -442,18 +448,21 @@ def deliver_card(r):
     if r["thread"]: args["message_thread_id"] = r["thread"]
     return api("sendMessage",disable_notification=True,**args)["message_id"]
 
-def photo_request(method,art,caption,**args):
+def media_request(method,art,caption,**args):
     styles = {"caption_entities":args.pop("caption_entities")} if "caption_entities" in args else {}
+    kind = "animation" if art.endswith(".mp4") else "photo"
     cached = FILE_IDS.get(art)
     for ref in ([cached,None] if cached else [None]):
         media = ref or "attach://picture"
-        data = dict(media=dict(type="photo",media=media,caption=caption,**styles)) if method=="editMessageMedia" else dict(photo=media,caption=caption,**styles)
+        data = dict(media=dict(type=kind,media=media,caption=caption,**styles)) if method=="editMessageMedia" else {kind:media,"caption":caption,**styles}
         try:
             response = api(method,upload=None if ref else picture_file(art),**data,**args)
         except ApiError as exc:
             if ref and exc.code==400 and "file" in str(exc).lower(): continue
             raise
-        if isinstance(response,dict) and response.get("photo"):
+        if kind=="animation" and isinstance(response,dict) and response.get("animation"):
+            FILE_IDS[art] = response["animation"]["file_id"]
+        elif kind=="photo" and isinstance(response,dict) and response.get("photo"):
             FILE_IDS[art] = response["photo"][-1]["file_id"]
         return response
 
