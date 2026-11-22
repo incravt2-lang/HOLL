@@ -229,7 +229,7 @@ def legacy_names(z):
 # First two slots retain the familiar neck and body slots for legacy saves.
 SLOTS = ("Шея","Нагрудник","Голова","Серьги","Наплечники","Рубаха","Наручи",
          "Кольцо I","Кольцо II","Плащ","Пояс","Перчатки","Поножи","Сапоги","Левая рука","Правая рука")
-SLOT_ORDER = (2,3,0,4,1,5,6,7,8,9,10,11,12,13,14,15)
+SLOT_ORDER = (2,3,0,4,1,5,6,9,7,8,10,11,12,13,14,15)
 RINGS = (7,8)
 EXTRA = [((2, 'Колпак уличного мучника'),
   (3, 'Серьги с полыми зёрнами'),
@@ -297,6 +297,14 @@ def gear_slot(z,k):
         return LEFT if ARM_BY_NAME[ARMS[z][k-arm_start(z)]][1] in ("Фолиант","Щит") else RIGHT
     if k>=original_count(z): return EXTRA[z][k-original_count(z)][0]
     return BASE_SLOTS[z][k]
+
+def item_slot_label(z,k):
+    slot = gear_slot(z,k)
+    if slot in RINGS:
+        return "Кольцо I или II"
+    if slot == RIGHT and two_handed(gear_names(z)[k]):
+        return "Правая рука · занимает обе руки"
+    return SLOTS[slot]
 
 def gear_stat(z,k):
     return int(gear_slot(z,k) != RIGHT)

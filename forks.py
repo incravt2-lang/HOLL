@@ -109,7 +109,7 @@ def pay(s,r):
                 news.append(grant(s,eligible[0],ticket,effect))
             else:
                 s.setdefault("writ_lots",{})[ticket]=dict(members=eligible,kind=effect,votes={},until=time.time()+86400)
-                news.append("Грамота вынесена. Дневник → Грамоты: выберите «Нужна» или «Уступить».")
+                news.append("Грамота вынесена. Герой → Лист персонажа → Грамоты: выберите «Нужна» или «Уступить».")
         else:news.append("Все участники уже получали грамоту за последние семь дней.")
     return "\n".join(news)
 

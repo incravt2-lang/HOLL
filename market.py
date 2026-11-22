@@ -146,29 +146,39 @@ def market(h,uid,section="town",note="",active=None,needed=None):
             rows.append(row(f"{v[0]} · {purchase(key_price(z),section,active)} мед. · ключей {h['keys'].get(str(z),0)}",f"key-{z}"))
     elif section=="sell" or section.startswith("sellpage"):
         page = int(section[8:]) if section.startswith("sellpage") else 0
-        equipment = []
-        total = 0
-        for key,count in h["junk"].items():
-            z,n = map(int,key.split("."))
-            price = scrap_value(z,n)
-            name = CURIOS[z] if n == 99 else SCRAPS[z][n]
-            reserved=min(count,needed.get(key,0))
-            if reserved: text.append(f"[Задания и ремёсла] {name} ×{reserved} · отложено")
-            count-=reserved
-            if not count: continue
-            text.append(f"[Хлам] {name} ×{count} · по {price} мед.")
-            total += count*price
-        if active=="wall" and total: text.append("Караул на стене · +10% к сумме за хлам.")
-        total,_=junk_payment(h,active,needed)
-        if total: rows.append(row(f"Продать весь хлам · +{total} мед.","cash"))
+        entries = []
         for z in range(len(BANDS)):
             for k,item in enumerate(gear_names(z)):
                 if item in h["items"] and item not in h["gear"]:
-                    equipment.append(row(f"Продать {item} · +{4*trade_value(z,k)} мед.",f"gear-{z}-{k}"))
-        rows.extend(equipment[page*12:(page+1)*12])
-        if page: rows.append(row("Предыдущие вещи",f"sellpage{page-1}"))
-        if (page+1)*12<len(equipment): rows.append(row("Следующие вещи",f"sellpage{page+1}"))
-        if not rows: text.append("Хлама и запасного снаряжения для продажи нет.")
+                    number = len(entries) + 1
+                    label = f"{number}. {item} · {4*trade_value(z,k)} мед."
+                    entries.append((label, row(str(number), f"gear-{z}-{k}")[0]))
+        for key,count in h["junk"].items():
+            z,n = map(int,key.split("."))
+            name = "Связка выделанных шкур" if (z,n)==(6,98) else material_name(key)
+            reserved = min(count,needed.get(key,0))
+            if reserved:
+                entries.append((f"[Задания и ремёсла] {name} ×{reserved} · отложено", None))
+            if count > reserved:
+                entries.append((f"[Хлам] {name} ×{count-reserved} · по {scrap_value(z,n)} мед.", None))
+        page_size = 5
+        last_page = max(0, (len(entries)-1)//page_size)
+        page = min(page,last_page)
+        visible = entries[page*page_size:(page+1)*page_size]
+        buttons = [button for _,button in visible if button]
+        if buttons:
+            text.append("\nВыбери номер вещи для продажи.")
+            rows.append(buttons)
+        text.extend(label for label,_ in visible)
+        total,_ = junk_payment(h,active,needed)
+        if total:
+            if active=="wall": text.append("Караул на стене · +10% к сумме за хлам.")
+            rows.append(row(f"Продать весь хлам · +{total} мед.","cash"))
+        if last_page:
+            text.append(f"Страница {page+1} из {last_page+1}")
+            if page: rows.append(row("‹ Назад",f"sellpage{page-1}"))
+            if page<last_page: rows.append(row("Далее ›",f"sellpage{page+1}"))
+        if not entries: text.append("Хлама и запасного снаряжения для продажи нет.")
     if section!="town": rows.append(row("К торговой площади","town"))
     return "\n".join(text),rows
 
@@ -180,7 +190,7 @@ def trade(h,uid,p,active=None,needed=None):
     if p[2]!=revision(h,active): return "Цены и запасы на этой карточке устарели. Вернись в город через меню.",[]
     action = p[3]
     if action in ("town","apoth","sell","keys","bags","scribe","armourer"): return view(action)
-    if action.startswith("sellpage") and action[8:] in tuple(map(str,range((sum(len(gear_names(z)) for z in range(len(BANDS)))+11)//12))): return view(action)
+    if action.startswith("sellpage") and action[8:].isascii() and action[8:].isdigit() and len(action[8:]) <= 6: return view(action)
     key = action.split("-")
     delta = 0
     if len(key)==3 and key[0]=="stock":

@@ -82,9 +82,9 @@ def api(method, upload=None, **data):
                        body.get("parameters",{}).get("retry_after",2), method) from None
 
 MENU = [
-    [("Дневник","diary"),("Сумка","bag"),("Гусзк","town")],
-    [("Охота","hunt"),("Подземелья","dungeons"),("Отряды","teams")],
-    [("Карта","zones"),("Игроки рядом","nearby"),("Кодекс","codex")],
+    [("Герой","hero"),("Гусзк","town")],
+    [("Карта","zones"),("Подземелья","dungeons"),("Отряды","teams")],
+    [("Кодекс","codex")],
 ]
 ACTIONS = {"patha","pathb","pathok","coinok","faceboss","turnback","exitfinish","pits","loft","closevote","join","go","leave","hit","block","skill","finish","heal","healok","ward","fury"} | set(POTIONS)
 
@@ -156,14 +156,21 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         event_art = "blessing_"+hero["class"]
     elif cmd=="start":
         hero = heroes.get(uid)
-        msg = f"{TITLE} · уровень {level(hero)}" if hero else f"{TITLE} · выбери класс в разделе «Дневник»"
+        msg = (f"{name} · {CLASSES[hero['class']][0]} · ур. {level(hero)}\n"
+               f"Место · {hero.get('talk_label','Торговая площадь Гусзка')}") if hero else f"{TITLE} · выбери класс в разделе «Герой»"
         rows = [[btn(label,"nav:"+dest) for label,dest in row] for row in MENU]
-        msg += f"\n{alpha.RELEASE} · онлайн за 10 мин: {len(state.get('seen',{}))}"
+        msg += f"\n\n{alpha.RELEASE} · онлайн за 10 мин: {len(state.get('seen',{}))}"
 
-        if hero and hero.get("coast_trip") and not mine: rows.insert(0,[btn("Дорога к морю","road")])
+        if hero and hero.get("coast_trip") and not mine:
+            trip=hero["coast_trip"]
+            label="К кострам лагеря" if trip["step"]==3 and not trip.get("returning") and not trip.get("waiting") else "Продолжить путь"
+            rows.insert(0,[btn(label,"road")])
 
         if hero and hero.get("last_result"): rows.append([btn("Итоги последнего боя","nav:report")])
         if mine: rows.insert(0,[btn("Вернуться в поход","nav:current")])
+    elif cmd=="hero" and hero:
+        msg=f"{CLASSES[hero['class']][0]} · ур. {level(hero)}"
+        rows=[[btn("Лист персонажа","nav:diary"),btn("Сумка","nav:bag")]]
     elif cmd=="codex":
         msg="Кодекс"
         rows=[[btn("Хроника","nav:lore"),btn("Бестиарий","nav:book"),btn("Правила","nav:help")],[btn("Найденные записки","nav:notes")]]
@@ -203,6 +210,8 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         if not isinstance(watch,dict) or (watch["chat"]==chat and (watch.get("topic") or 0)==(topic or 0)):
             watches.pop(uid,None)
     menu = [btn("☰ Меню","nav:start")]
+    if op in ("diary","bag") and hero:
+        rows=rows+[[btn("‹ Герой","nav:hero")]]
     if cmd in ("lore","book","help"):
         menu.insert(0,btn("‹ Кодекс","nav:codex"))
     elif cmd in ("raid","vault") and not mine:
@@ -210,6 +219,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     if cmd=="raid" and not mine: rows=[[btn("Открытые сборы","nav:teams")]]+rows
     if cmd!="start" and not event_art: rows = rows+[menu]
     result = screen(db,chat,uid,name,topic,msg,rows,open_here=not cb)
+    if cmd=="start" and hero: result["text"]=msg
     result["cb"] = cb
     if event_art:
         result["art"] = event_art
@@ -266,7 +276,7 @@ def screen_picture(command, hero):
     op, *args = command.split(":")
     if op=="band" and args: return {"raid":"raid","vault":"vault","book":"book"}.get(args[0],"world")
     if op=="craft": return "coast_veya" if args[:1]==["veya"] else "coast_hariton"
-    if op=="road": return "coast_road"
+    if op=="road": return "coast_road" if hero and hero.get("coast_trip") else "town"
     if op=="notes": return "lore"
     if op=="codex": return "book"
     if op=="dungeons": return "raid"
@@ -366,6 +376,10 @@ def shared_action(db,state,chat,uid,topic,cmd,cb,m,actor):
     if cmd=="resume":cmd="current" if mine else "start"
     if cmd.startswith("legacy:"):cmd="start"
     name=registered[0] if registered else actor.get("first_name","Путник")[:32]
+    trip=(hero or {}).get("coast_trip",{})
+    if not mine and (trip.get("returning") or trip.get("step")==3 and not trip.get("waiting")):
+        if cmd.split(":")[0] in {"town","orders","shop","travel","new","join"}:
+            cmd="road" if trip.get("returning") else f"road:{trip['id']}:return"
     if hero and not mine and (cmd in ("town","orders") or cmd.startswith(("orders:", "shop:"))):
         hero.pop("hunting_ground",None)
         hero.pop("coast_trip",None)
@@ -414,8 +428,7 @@ def notify_trade(db,result,before,after,state,username):
             h=state["heroes"][who]
             r=next((r for r in state["fights"].values() if who in r["party"]),None)
             text,rows=board(state,r,who) if r else (h["talk_label"],[])
-            rows=rows+[[btn("Игроки рядом","nearby"),btn("Меню","nav:start")],
-                       [{"text":"Открыть чат","url":f"https://t.me/{username}?startapp=chat"}]]
+            rows=rows+[[btn("Игроки рядом","nearby")],[{"text":"Открыть чат","url":f"https://t.me/{username}?startapp=chat"}],[btn("☰ Меню","nav:start")]]
             card=screen(db,old[0],who,h["name"],old[1],text,rows)
             card["art"]=fight_picture(r) if r else card.get("previous_art") or "gate"
 
@@ -495,11 +508,19 @@ def process(db, update, username):
                 room=h.get("talk_room")
                 if room and db.execute("SELECT 1 FROM alpha_names WHERE uid=?",(who,)).fetchone():
                     label="Чат отряда" if room.startswith("party/") else "Чат локации"
-                    if cmd.split(":")[0] in ACTIONS|{"start","town","road","current","travel","new"}:
+                    if cmd.split(":")[0] in ACTIONS|{"town","road","current","travel","new"}:
                         card["text"]+="\n\nМесто · "+h["talk_label"]
+                    art=card.get("art","")
+                    party_view=room.startswith(("party/","vault/")) and (art.startswith(("room_","raid_","vault_","fork_")))
+                    public_view=(art=="town" or art=="coast_road" or party_view or
+                                 (room.startswith("hunt/") and (cmd.startswith("travel:") or art.startswith("beast_"))))
+                    if not public_view: continue
+                    menus=[row for row in card["rows"] if any(b.get("callback_data")=="nav:start" for b in row)]
+                    card["rows"]=[row for row in card["rows"] if row not in menus]
                     if not any(b.get("callback_data") in ("nearby","nav:nearby") for row in card["rows"] for b in row):
                         card["rows"].append([btn("Игроки рядом","nearby")])
                     card["rows"].append([{"text":label,"url":f"https://t.me/{username}?startapp=chat"}])
+                    card["rows"].extend(menus)
             notify_trade(db,result,before_offers,recipients(state),state,username)
         else:
             return
@@ -569,7 +590,8 @@ def deliver_card(r):
             for label,number in (("←",page-1),("→",page+1)):
                 if 0<=number<len(pages):
                     nav.append(btn(f"{label} {number+1}/{len(pages)}",f"page:{view_key(r)}:{number}"))
-            buttons.append(nav)
+            index=next((i for i,row in enumerate(buttons) if any(b.get("callback_data")=="nav:start" for b in row)),len(buttons))
+            buttons.insert(index,nav)
         photo_args = dict(chat_id=r["chat"],reply_markup={"inline_keyboard":buttons})
         spans = combat_entities(pages[page])
         if spans: photo_args["caption_entities"] = spans

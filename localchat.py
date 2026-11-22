@@ -39,7 +39,10 @@ def track(state):
             label=place+(" · сбор" if not r["round"] else f" · зал {r.get('room',0)+1}/3")
         elif trip:
             step=trip["step"]
-            if step==3 and not trip.get("waiting") and not r:room,label="camp","Лагерь «У моря»"
+            if trip.get("returning"):
+                room=("camp","road/2","road/1","road/0")[step]
+                label=("Лагерь «У моря»","Рыбная дорога","Верстовой столб","За городскими воротами")[step]
+            elif step==3 and not trip.get("waiting") and not r:room,label="camp","Лагерь «У моря»"
             else:
                 room=f"road/{step}"
                 label=("За городскими воротами","Верстовой столб","Рыбная дорога","Костры над отмелью")[step]

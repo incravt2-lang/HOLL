@@ -85,7 +85,7 @@ def attack(h):
 from world import LIMITS, level, required_level
 from world import area_name, encounter_area, encounter_trait, faction, HUNT_IDS, EXTRA_HUNT_IDS, ZONES, TRAITS, BANDS, VAULTS, SCRAPS, gear_names, monster, rank, strength
 from world import LEFT, RIGHT, two_handed, ARM_BY_NAME, ARMS, arm_start
-from world import SLOTS, SLOT_ORDER, RINGS, gear_slot, gear_stat, original_count
+from world import item_slot_label, SLOTS, SLOT_ORDER, RINGS, gear_slot, gear_stat, original_count
 from quests import desk, record_win
 from notes import collection, find_note
 from coast import craft, journal, road
@@ -486,7 +486,7 @@ def resolve(s,r,viewer=None):
             if random.random()<equipment_chance(r["mode"],n):
                 k = roll_equipment(z,n,r["mode"],h["class"])
                 item = gear_names(z)[k]
-                label = f"[{category(z,k)}] "+tier_name(z,k)+" · "+item
+                label = f"[{category(z,k)}] "+tier_name(z,k)+" · "+item+" — "+item_slot_label(z,k)
                 if item not in h["items"]:
                     h["items"][item] = [gear_stat(z,k),strength(z,k)]
                 elif r["mode"]=="hunt":
@@ -674,15 +674,31 @@ def inventory(h,uid,slot=None,page=0,needed=None,active=None):
         rows = []
         buttons = []
         for j in SLOT_ORDER:
-            display = h["gear"][j] or ("двуручное оружие" if j==LEFT and two_handed(h["gear"][RIGHT]) else "—")
-            buttons.append(btn(SLOTS[j]+" · "+display,f"slot:{uid}:{j}"))
+            buttons.append(btn(SLOTS[j],f"slot:{uid}:{j}"))
         rows = [buttons[j:j+2] for j in range(0,len(buttons),2)]
+        items=list(reversed(h["items"]))
+        page_size=6
+        pages=max(1,(len(items)+page_size-1)//page_size)
+        page=min(page,pages-1)
+        overview=[]
+        for item in items[page*page_size:(page+1)*page_size]:
+            z,k=map(int,ITEM_CODES[item].split("."))
+            if item in h["gear"]:
+                where=SLOTS[h["gear"].index(item)]+" · надето"
+            else:
+                where=item_slot_label(z,k)
+            overview.append(f"{item} — {where}")
+        if pages>1:
+            rows.insert(0,[btn(label,f"bag:{target}") for label,target in
+                           (("‹ Новее",page-1),("Старее ›",page+1)) if 0<=target<pages])
         if h.get("buckles") or h.get("spare_drops"): rows.append([btn("Трофеи походов","spoils")])
         rows.append([btn("Хлам и материалы","materials")])
         stock = [f"{v[0]} ×{h['potions'][k]}" for k,v in POTIONS.items() if h["potions"].get(k)]
-        rows.append([btn("Игроки рядом","nearby"),btn("Скупщик","shop:"+uid+":"+revision(h,active)+":sell")])
-        return reply(f"Снаряжение · {h['name']}\nВыбери ячейку, чтобы примерить или снять вещь.\n"
-                     f"Хлам {units(h,needed)}/{capacity(h)} · {h['wallet']} мед.\nРасходники: "+(", ".join(stock) or "пусто"),rows)
+        rows.append([btn("Скупщик","shop:"+uid+":"+revision(h,active)+":sell")])
+        heading=f"Снаряжение · {len(items)}"
+        if pages>1: heading+=f" · стр. {page+1}/{pages}"
+        return reply(heading+"\n"+("\n".join(overview) if overview else "Пока нет вещей.")+
+                     f"\n\nХлам {units(h,needed)}/{capacity(h)} · {h['wallet']} мед.\nРасходники: "+(", ".join(stock) or "пусто"),rows)
     worn = h["gear"][slot]
     label_worn = worn
     sources = []
@@ -766,11 +782,16 @@ def play(s,uid,name,cmd):
         heroes[uid] = dict(name=name,xp=0,items={},gear=[None]*len(SLOTS),**{"class":p[2]})
         setup(heroes[uid])
         return reply(f"Класс выбран.\n{name} · {CLASSES[p[2]][0]}")
-    if not h: return reply("Выбери класс в разделе «Мой герой».")
+    if not h: return reply("Выбери класс в разделе «Герой».")
     mine = next((r for r in fights.values() if uid in r["party"]),None)
     if op in ("road","roadfight","craft"):
         if mine: return board(s,mine,uid)
-        if op=="road": return road(h,p[1:])
+        if op=="road":
+            returning=h.get("coast_trip",{}).get("returning")
+            text,rows=road(h,p[1:])
+            if returning and not h.get("coast_trip"):
+                return market(h,uid,note="Дорога в Гусзк · 3/3\n"+text,active=city.buff(s),needed=needs(s,uid))
+            return text,rows
         if op=="craft": return craft(h,p[1:],city.buff(s))
         trip=h.get("coast_trip",{})
         if not trip.get("waiting") or p[1:]!=[trip.get("id")]: return reply("Засада уже позади.")
@@ -813,7 +834,9 @@ def play(s,uid,name,cmd):
         for (label,_),v in zip(city.GOALS.get(project.get("kind"),()),project.get("cargo",{}).get(uid,())):
             if v:lines.append(f"[Задания] {label} ×{v}")
         return reply("\n".join(lines) or "Материалов пока нет.",[[btn("К сумке","nav:bag")]])
-    if op=="bag": return inventory(h,uid,needed=needs(s,uid),active=city.buff(s))
+    if op=="bag":
+        page=int(p[1]) if len(p)==2 and p[1].isascii() and p[1].isdigit() and len(p[1])<=6 else 0
+        return inventory(h,uid,page=page,needed=needs(s,uid),active=city.buff(s))
     if op in ("slot","off","dress") and len(p)>=3 and p[1]==uid and p[2] in tuple(map(str,range(len(SLOTS)))):
         slot = int(p[2])
         if op=="slot": return inventory(h,uid,slot,int(p[3]) if len(p)==4 and p[3].isascii() and p[3].isdigit() and len(p[3])<6 else 0)

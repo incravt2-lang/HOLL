@@ -7,14 +7,19 @@ import time
 
 from market import asking_price
 from quests import copper, SHIFT, details, progress
-from world import category, SEAM_SHIELD, encounter_area, BANDS, CLASS_PIECES, HUNT_IDS, SCRAPS, SLOTS, ZONES, faction, gear_stat, level, monster, rank, strength, tier_name
+from world import item_slot_label, category, SEAM_SHIELD, encounter_area, BANDS, CLASS_PIECES, HUNT_IDS, SCRAPS, SLOTS, ZONES, faction, gear_stat, level, monster, rank, strength, tier_name
 
 MASTERS={"veya":"Шорница Вея","hariton":"Оружейник Харитон"}
 SLOTS_BY_MASTER={"veya":(0,3,5,7,9,10,11,13),"hariton":(1,2,4,6,12,14,15)}
 ROAD=(
- ("Верстовой столб","У последнего столба стёрто расстояние до моря. Колеи уходят к камышам."),
- ("Рыбная дорога","По лоткам старого рыбного торга барабанит дождь. Под навесом ещё сухо."),
- ("Костры над отмелью","Сквозь мокрую сеть виден огонь. Часовой приподнимает жердь над тропой."),
+ ("Верстовой столб","За воротами колёса продавили глину до белого щебня. На верстовом столбе ещё видна зарубка дозора. От неё к камышам тянется след узкой тележки."),
+ ("Рыбная дорога","Дождь стучит по опрокинутым лоткам старого торга. Вода бежит под досками к морю. На сухой стороне навеса кто-то развесил для просушки сеть."),
+ ("Костры над отмелью","За дюной пахнет смолой. Часовой поднимает жердь, и сквозь дым уже видно, как у костра шорница вытягивает из кожи длинный ремень."),
+)
+RETURN_ROAD=(
+ ("Рыбная дорога","Море скрылось за насыпью, но в спину ещё дует солёный ветер. На пустом рыбном торгу скрипит вывеска. Под навесом разведчик чинит сеть и кивает вам вслед."),
+ ("Верстовой столб","У столба дорога раздваивается. Камышовая тропа уходит в топь, а в глубокой колее поблёскивает свежий подковный гвоздь. За полями уже видны зубцы городской стены."),
+ ("Ворота Гусзка","Стражник отводит засов. Под аркой запах тины уступает дыму пекарни. Телега гремит по разбитой мостовой, и следом за ней вы выходите на торговую площадь."),
 )
 
 def row(label,cmd):
@@ -83,6 +88,11 @@ def journal(s,uid):
 
 def road(h,args):
     trip=h.get("coast_trip")
+    if args and not trip:
+        return "Этот переход уже завершён.",[]
+    if trip and args==[trip["id"],"return"] and trip["step"]==3 and not trip.get("waiting") and not trip.get("returning"):
+        trip=h["coast_trip"]=dict(id=secrets.token_hex(3),step=0,returning=True,
+                ambush=random.randrange(1,4) if random.random()<0.12 else 0)
     if not trip:
         trip=h["coast_trip"]=dict(id=secrets.token_hex(3),step=0,
                 ambush=random.randrange(1,4) if random.random()<0.12 else 0)
@@ -91,13 +101,28 @@ def road(h,args):
         if trip["step"]==trip["ambush"]: trip["waiting"]=True
     if trip.get("waiting") and args==[trip["id"],"bypass"] and h.pop("safe_trail",False):
         trip["waiting"]=False
+    returning=trip.get("returning",False)
+    if returning and trip.get("waiting") and args==[trip["id"],"retreat"]:
+        trip=h["coast_trip"]=dict(id=secrets.token_hex(3),step=3,ambush=0)
+        returning=False
     if trip.get("waiting"):
         bypass=[row("Обойти по тропе","road:"+trip["id"]+":bypass")] if h.get("safe_trail") else []
-        return "Поперёк дороги лежит подвода. Из-под брезента поднимается вооружённый человек. Засада!",[row("Принять бой","roadfight:"+trip["id"]),row("Отступить в Гусзк","nav:town")]+bypass
+        return "Поперёк дороги лежит подвода. Из-под брезента поднимается вооружённый человек. Засада!",[row("Принять бой","roadfight:"+trip["id"]),(row("Отступить в лагерь",f"road:{trip['id']}:retreat") if returning else row("Отступить в Гусзк","nav:town"))]+bypass
+    if returning and trip["step"]==3:
+        del h["coast_trip"]
+        h.pop("hunting_ground",None)
+        return RETURN_ROAD[2][1],[]
     if trip["step"]==3:
-        return ROAD[2][1]+"\nЛагерь разведчиков «У моря»", [row(name,"craft:"+m) for m,name in MASTERS.items()]+([row("Мастер · пряжки Кожевен","spoils")] if h.get("buckles") else [])+[row("Вернуться в Гусзк","nav:town")]
-    label,text=ROAD[trip["step"]-1] if trip["step"] else ("За городскими воротами","До лагеря разведчиков три перехода.")
-    return f"Дорога к морю · {trip['step']}/3\n{label}\n{text}",[row("Идти дальше",f"road:{trip['id']}:{trip['step']}")]
+        return ROAD[2][1]+"\nЛагерь разведчиков «У моря»", [row(name,"craft:"+m) for m,name in MASTERS.items()]+([row("Мастер · пряжки Кожевен","spoils")] if h.get("buckles") else [])+[row("В путь до Гусзка",f"road:{trip['id']}:return")]
+    if trip["step"]:
+        scenes=RETURN_ROAD if returning else ROAD
+        label,text=scenes[trip["step"]-1]
+    elif returning:
+        label,text="У лагерного костра","Вы поправляете лямку сумки. До городских ворот три перехода."
+    else:
+        label,text="За городскими воротами","До лагеря разведчиков три перехода."
+    direction="Дорога в Гусзк" if returning else "Дорога к морю"
+    return f"{direction} · {trip['step']}/3\n{label}\n{text}",[row("Идти дальше",f"road:{trip['id']}:{trip['step']}")]
 
 def craft(h,args,active=None):
     trip=h.get("coast_trip",{})
@@ -125,7 +150,7 @@ def craft(h,args,active=None):
                 del writs[ticket]
                 timers[m]=now+900
                 wait=900
-                note="Получено по грамоте: "+item
+                note="Получено по грамоте: "+item+" — "+item_slot_label(z,k)
     if len(args)==3 and args[1] in ("preview","take") and args[2].isdigit() and int(args[2]) in SLOTS_BY_MASTER[m] and not order:
         slot=int(args[2])
         if args[1]=="preview":
@@ -157,7 +182,7 @@ def craft(h,args,active=None):
                         if not h["junk"][key]: del h["junk"][key]
                     h["wallet"]-=fee(order,active);timers[m]=now+900;wait=900
                     del orders[m];order=None
-                    note=f"Получено: [{category(z,k)}] "+tier_name(z,k)+" · "+item
+                    note=f"Получено: [{category(z,k)}] "+tier_name(z,k)+" · "+item+" — "+item_slot_label(z,k)
     lines=[MASTERS[m]]
     if note: lines.append(note)
     if wait: lines.append(f"До следующей выдачи: {wait//60}:{wait%60:02d}")

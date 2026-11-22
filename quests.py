@@ -3,7 +3,7 @@ import city
 import random
 import time
 
-from world import category, SEAM_SHIELD, encounter_area, CLASS_PIECES, HUMAN_IDS, faction, HUNT_IDS, EXTRA_HUNT_IDS, trade_value, LIMITS, RARITY, SCRAPS, ZONES, gear_names, gear_stat, level, monster, rank, strength, tier_name
+from world import item_slot_label, category, SEAM_SHIELD, encounter_area, CLASS_PIECES, HUMAN_IDS, faction, HUNT_IDS, EXTRA_HUNT_IDS, trade_value, LIMITS, RARITY, SCRAPS, ZONES, gear_names, gear_stat, level, monster, rank, strength, tier_name
 
 SHIFT = 6 * 3600
 KINDS = {
@@ -67,6 +67,8 @@ def details(q):
     hard = kind=="raid" or n not in HUNT_IDS
     xp = (28+rank(z,n)*3)*(3 if kind=="raid" else 2 if hard else 1)
     xp *= 3 if kind=="raid" else q["need"]
+    if hard:
+        label="🏰 "+label
     return label,xp,(15 if kind=="raid" else 7 if hard else 2)
 
 def copper(q):
@@ -96,7 +98,7 @@ def payout(q,h,active=None):
         award=f"{item} уже есть · +{coins} мед."
     else:
         h["items"][item]=[gear_stat(z,k),strength(z,k)]
-        award=f"[{category(z,k)}] "+tier_name(z,k)+" · "+item
+        award=f"[{category(z,k)}] "+tier_name(z,k)+" · "+item+" — "+item_slot_label(z,k)
     return f"Комендант поставил печать. +{xp} опыта · +{copper(q)} мед. · {award}"
 
 def desk(state,uid,args):
@@ -131,7 +133,9 @@ def desk(state,uid,args):
                 xp=city.earned(xp,city.buff(state),h)
                 z,n=q["z"],q["n"]
                 site=encounter_area(z,n)
-                if n not in HUNT_IDS: site+=" · "+ZONES[z][2][(n-3)//3][0]
+                if n not in HUNT_IDS:
+                    dungeon,room=divmod(n-3,3)
+                    site+=f"\n🏰 Подземелье · {ZONES[z][2][dungeon][0]} · зал {room+1}/3"
                 orders={"robber":"Обозчики опознали налётчиков. Возврати дорогу подводам.",
                         "oath":"Старый караульный список сходится. Беглец снова берёт пошлину оружием.",
                         "cult":"У амбара опять собирают десятину в чашу без дна. Разберись со сборщиками.",
@@ -153,6 +157,7 @@ def desk(state,uid,args):
     text=["Комендант Гусзка · караульная книга",
           "«Пока амбары полны, ворота держатся. Бери запись — и распишись по возвращении».",
           f"Доска уровней {(board['level']-1)//10*10+1}–{(board['level']-1)//10*10+10} · до смены доски {minutes//60} ч {minutes%60} мин."]
+    text.append("🏰 — цель в подземелье. Без метки — на обычной охоте.")
     if note: text.append(note)
     rows=[]
     for i,q in enumerate(jobs):
