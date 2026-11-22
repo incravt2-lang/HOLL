@@ -130,11 +130,12 @@ def road(h,args):
 
 def craft(h,args,active=None):
     trip=h.get("coast_trip",{})
-    if trip.get("step")!=3 or trip.get("waiting") or not args or args[0] not in MASTERS:
+    if trip.get("step")!=3 or trip.get("waiting") or trip.get("returning") or not args or args[0] not in MASTERS:
         return "Мастер принимает в лагере у моря.",[]
     m=args[0];prefix="craft:"+m
     orders=h.setdefault("commissions",{});order=orders.get(m)
     now=int(time.time());timers=h.setdefault("craft_ready",{});wait=max(0,timers.get(m,0)-now)
+    slots=random.Random(f"{m}:{now//SHIFT}").sample(SLOTS_BY_MASTER[m],4)
     back=row("К мастеру",prefix)
     note=""
     writs=h.get("writs",{})
@@ -155,7 +156,7 @@ def craft(h,args,active=None):
                 timers[m]=now+900
                 wait=900
                 note="Получено по грамоте: "+item+" — "+item_slot_label(z,k)
-    if len(args)==3 and args[1] in ("preview","take") and args[2].isdigit() and int(args[2]) in SLOTS_BY_MASTER[m] and not order:
+    if len(args)==3 and args[1] in ("preview","take") and args[2].isdigit() and int(args[2]) in slots and not order:
         slot=int(args[2])
         if args[1]=="preview":
             o=offer(h,slot);h.setdefault("craft_quotes",{})[m]=o
@@ -195,7 +196,7 @@ def craft(h,args,active=None):
         lines.append(describe(h,order,active))
         rows=[row("Передать материалы",prefix+":finish:"+order["id"]),row("Отказаться от заказа",prefix+":cancel:"+order["id"])]
     else:
-        lines.append("Выбери ячейку для изделия. Оба кольца подходят для любой кольцевой ячейки.")
-        rows=[row(SLOTS[i] if i!=7 else "Кольцо",prefix+":preview:"+str(i)) for i in SLOTS_BY_MASTER[m]]
+        lines.append("Сегодня в работе четыре ячейки. Выбор обновляется каждые 6 часов.")
+        rows=[row(SLOTS[i] if i!=7 else "Кольцо",prefix+":preview:"+str(i)) for i in slots]
     rows.extend(row("Предъявить грамоту",prefix+":writ:"+k) for k,v in writs.items() if v in (m,"guild"))
-    return "\n".join(lines),rows+[row("Кузнечное дело" if m=="hariton" else "Портняжное дело","work:"+("forge" if m=="hariton" else "sew")),row("К кострам","road")]
+    return "\n".join(lines),rows+[row("Кузнечное дело" if m=="hariton" else "Портняжное дело","work:"+("forge" if m=="hariton" else "sew")+":master"),row("К кострам","road")]

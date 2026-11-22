@@ -88,6 +88,7 @@ from world import LIMITS, level, required_level
 from world import area_name, encounter_area, encounter_trait, faction, HUNT_IDS, EXTRA_HUNT_IDS, ZONES, TRAITS, BANDS, VAULTS, SCRAPS, gear_names, monster, rank, strength
 from world import LEFT, RIGHT, two_handed, ARM_BY_NAME, ARMS, arm_start
 from world import item_slot_label, SLOTS, SLOT_ORDER, RINGS, gear_slot, gear_stat, original_count
+import special_orders
 from progression import victory_xp
 from quests import desk, record_win
 from notes import collection, find_note
@@ -247,8 +248,11 @@ def return_route(r):
 def maximum(r):
     n = target(r)
     if r["mode"]=="vault": return 25+3*rank(r["z"],n)
-    if r["mode"]=="hunt": return len(r["party"])*(24+4*r.get("road_level",rank(r["z"],n)))
-    return len(r["party"])*(14+2*rank(r["z"],n)+(5 if n>=3 else 0))
+    if r["mode"]=="hunt":
+        hp=len(r["party"])*(24+4*r.get("road_level",rank(r["z"],n)))
+        return (hp*125+50)//100 if r.get("elite") else hp
+    hp=len(r["party"])*(14+2*rank(r["z"],n)+(5 if n>=3 else 0))
+    return (hp*130+50)//100 if r.get("elite") else hp
 
 def title(r):
     z = r["z"]
@@ -312,8 +316,10 @@ def board(s,r,viewer=None):
     if not r["round"]:
         names = ", ".join(s["heroes"][i]["name"] for i in r["party"])
         if r["mode"]=="vault":
-            return reply(f"{title(r)} · одиночный тайник · ур. {rank(r['z'],11)}\nТри зала. Зелья продаются у городского аптекаря. Вход расходует один ключ.\n{risk}",
-                         [[btn("Войти за ключ",f"go:{key}"),btn("Отменить",f"leave:{key}")]])
+            admitted=special_orders.permit(s["heroes"][r["party"][0]],r["z"])
+            entry="Вход по допуску коменданта." if admitted else "Вход расходует один ключ."
+            return reply(f"{title(r)} · одиночный тайник · ур. {rank(r['z'],11)}\nТри зала. Зелья продаются у городского аптекаря. {entry}\n{risk}",
+                         [[btn("Войти по допуску" if admitted else "Войти за ключ",f"go:{key}"),btn("Отменить",f"leave:{key}")]])
         return reply(f"{title(r)} · сбор {len(r['party'])}/6\n{names}\n{risk}",
                      ([[btn("Начать бой",f"go:{key}")],[btn("Выйти из сбора",f"leave:{key}")]] if viewer in r["party"] else [[btn("Вступить в отряд",f"join:{key}")]]))
     z,n = r["z"],target(r)
@@ -376,7 +382,8 @@ def board(s,r,viewer=None):
     divider = "\n\n────────────\n\n"
     ready = sum(uid in r["moves"] for uid in r["party"])
     log = r.get("log") or ""
-    return reply(f"{title(r)}{stage} · раунд {r['round']}\n{monster(z,n)} · ур. {r.get('road_level',rank(z,n))} · {r['enemy']} ХП\n"
+    foe=("[Элита] " if r.get("elite") else "")+monster(z,n)
+    return reply(f"{title(r)}{stage} · раунд {r['round']}\n{foe} · ур. {r.get('road_level',rank(z,n))} · {r['enemy']} ХП\n"
                  f"{encounter_trait(z,n)[0]} · {encounter_trait(z,n)[1]}\n\nОтряд: {r['hp']}/{r['maxhp']} ХП{stamina_line}{active}"
                  + (divider + log if log else "") + divider + f"Действия сейчас · {ready}/{len(r['party'])} готовы\n{actions_text(s,r)}",
                  [[btn(t,f"{a}:{suffix}") for t,a in (("Удар","hit"),("Блок","block"),(skill_label,"skill"))],
@@ -509,7 +516,7 @@ def resolve(s,r,viewer=None):
             if piece:
                 tag="" if piece=="сумка полна" else ("[Задания и ремёсла] " if protected else "[Хлам] ")
                 scraps.append(f"{h['name']}: {tag}{piece}")
-            if random.random()<equipment_chance(r["mode"],n):
+            if random.random()<equipment_chance(r["mode"],n,r.get("elite",False)):
                 k = roll_equipment(z,n,r["mode"],h["class"])
                 item = gear_names(z)[k]
                 label = f"[{category(z,k)}] "+tier_name(z,k)+" · "+item+" — "+item_slot_label(z,k)
@@ -560,6 +567,8 @@ def resolve(s,r,viewer=None):
                 xp = min(LIMITS[-1]-h["xp"],city.earned(base_xp,city.buff(s),h))
                 h["xp"] += xp
                 h["peak"] = max(level(h),h.get("peak",1))
+                evidence=special_orders.record(h,r,n,xp)
+                if evidence:lines.append(h["name"]+" · "+evidence)
                 up = f" · уровень {level(h)}!" if level(h)>lv else ""
                 lines.append(f"{h['name']}: +{xp} опыта{up}" + (f" · {source}" if source else ""))
             return reply("\n".join(lines),return_route(r))
@@ -607,6 +616,8 @@ def resolve(s,r,viewer=None):
             else:
                 raw+=enemy_lv//2
                 msg+=" Гиря ударила с размаху."
+        if r.get("elite"):
+            raw=(raw*(110 if r["mode"]=="hunt" else 112)+50)//100
         taken = max(0,random.randint(*bounds(raw*len(party)))-shield)
         if boss and effect=="bell" and answers==1:r["bell_raised"]=True
         if boss and not answers:
@@ -754,7 +765,7 @@ def inventory(h,uid,slot=None,page=0,needed=None,active=None):
                 continue
             label=gear_description(h,z,k,item)
             if item!=worn:
-                if item in h["gear"]: label += " · "+SLOTS[h["gear"].index(item)]
+                if item in h["gear"]: continue
                 rows.append([btn(label,f"dress:{uid}:{slot}:{z}:{k}")])
             else: label_worn = label
     pages=max(1,(len(rows)+2)//3)
@@ -883,7 +894,7 @@ def play(s,uid,name,cmd):
             if level(h)<wear_level(z,k): return reply(f"Нужен уровень {wear_level(z,k)}.")
             if slot==LEFT and two_handed(h["gear"][RIGHT]): return reply("Сначала сними двуручное оружие.")
             if two_handed(item) and h["gear"][LEFT]: return reply("Для этого оружия нужны обе руки. Сначала сними предмет с левой руки.")
-            if item in h["gear"]: h["gear"][h["gear"].index(item)] = None
+            if item in h["gear"]: return inventory(h,uid,slot)
             h["gear"][slot] = item
         return inventory(h,uid,slot)
     if op in MODES:
@@ -962,13 +973,15 @@ def play(s,uid,name,cmd):
         if op=="go":
             if uid not in r["party"]: return reply("Сначала войди в отряд.")
             if r["mode"]=="raid" and len(r["party"])<2: return reply("В подземелье нужны хотя бы двое.")
-            if r["mode"]=="vault":
+            if r["mode"]=="vault" and not special_orders.permit(h,r["z"]):
                 zone_key = str(r["z"])
                 if h["keys"].get(zone_key,0)<1: return reply("Нужен ключ от этого тайника. Купи его у ключницы в городе.")
                 h["keys"][zone_key] -= 1
             hp = sum(health(heroes[i]) for i in r["party"])
             for member in r["party"]:
                 heroes[member]["shop_rev"] += 1
+            if r["mode"]=="hunt":
+                r["elite"]=random.random()<0.06
             r.update(round=1,enemy=maximum(r),hp=hp,maxhp=hp,moves={},ready={},deadline=time.time()+60,log="Начало боя.")
         return board(s,r,uid)
     if uid not in r["party"]: return reply("Ты наблюдаешь за этим боем.")
@@ -998,6 +1011,9 @@ def play(s,uid,name,cmd):
             for member in r["party"]: heroes[member]["returning_from_fight"]=True
             return reply(f"Отряд вернулся · {title(r)}\nНаходки очищенных залов перенесены в сумки. Зачистка босса не засчитана."+("\n"+reward if reward else ""),return_route(r))
         del r["exit_votes"]
+        if r["mode"]=="raid":
+            r["elite"]=random.random()<0.15
+            r["enemy"]=maximum(r)
         r.update(deadline=time.time()+60,log="Отряд вошёл в зал босса.")
         return board(s,r,uid)
     if op in ("turnback","faceboss","exitfinish","coinok"): return board(s,r,uid)

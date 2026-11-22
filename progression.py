@@ -36,13 +36,18 @@ def contract_xp(hero, job, original, commit=False):
 def victory_xp(hero, fight, enemy_level, now):
     lv = level(hero)
     mode = fight["mode"]
-    if lv < 10 or mode == "vault":
+    carried = mode == "raid" and lv < 10 and enemy_level >= lv + 6
+    elite = fight.get("elite", False)
+    if (lv < 10 and not carried) or mode == "vault":
         base = 16 + min(enemy_level, lv + 4) * 2
         factor = 162 if mode == "raid" else 12
         gap = 1 + max(0, lv - enemy_level - 4)
-        return max(1, factor * base // (10 * gap)), ""
+        xp = max(1, factor * base // (10 * gap))
+        if elite:
+            xp = (xp * (150 if mode == "hunt" else 120) + 50) // 100
+        return xp, ""
     if mode == "hunt":
-        return scaled(hero, enemy_level, 54 * 3, True), ""
+        return scaled(hero, enemy_level, (81 if elite else 54) * 3, True), ""
     dungeon = f"{fight['z']}.{fight['choice']}"
     resets = hero.setdefault("raid_xp_resets", {})
     first = resets.get(dungeon, 0) <= now
@@ -50,4 +55,7 @@ def victory_xp(hero, fight, enemy_level, now):
         resets[dungeon] = now + DAY
     shares = 336 if first else 168
     label = "первая зачистка за сутки" if first else "повторная зачистка"
-    return scaled(hero, enemy_level, shares * 3, True), label
+    xp = scaled(hero, enemy_level, shares * 3, True)
+    if elite and not carried:
+        xp = (xp * 120 + 50) // 100
+    return xp, label

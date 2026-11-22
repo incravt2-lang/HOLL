@@ -114,6 +114,10 @@ def payout(q,h,active=None):
     return f"Комендант поставил печать. +{xp} опыта · +{copper(q)} мед. · {award}"
 
 def desk(state,uid,args):
+    if args[:1]==["special"]:
+        import special_orders
+        from cargo import needs
+        return special_orders.view(state["heroes"][uid],args[1:],needs(state,uid))
     now=time.time()
     board=rotation(state,now,uid)
     shift=board["shift"]
@@ -186,6 +190,7 @@ def desk(state,uid,args):
     if pages>1:
         rows.append([button(label,f"orders:page:{i}")[0] for label,i in (("‹ Назад",page-1),("Далее ›",page+1)) if 0<=i<pages])
     if not rows: text.append("Все записи погашены. Новые прибьют со сменой караула.")
+    if level(h)>=15:rows.insert(0,button("Особое поручение","orders:special"))
     project=city.current(state)
     rows.insert(0,button("Общее дело · "+city.PROJECTS[project["kind"]][0],"city"))
     return "\n\n".join(text),rows+[button("К торговой площади","nav:town")]

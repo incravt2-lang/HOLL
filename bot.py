@@ -277,6 +277,8 @@ def fight_picture(fight):
     if mode == "hunt":
         return hunt_picture(fight)
     if fight["round"]:
+        if fight.get("elite") and mode=="raid" and fight["z"]==1 and target(fight)==8:
+            return "room_sheep_elite"
         if fight.get("route")=="loft" and fight["room"]==1:
             return "room_tannery_loft"
         return f"room_{fight['z']}_{target(fight)}"

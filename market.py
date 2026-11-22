@@ -9,12 +9,12 @@ from world import class_power, trade_value, tier_name,bonus_label,CODE_ITEMS, IT
 from world import SEAM_SHIELD, wear_level, level, BANDS, VAULTS, SCRAPS, gear_names, strength
 
 BAGS = ((8,0),(18,40),(36,110),(64,260))
-POTIONS = {"heal":("Малая аптечная мера",6), "fury":("Глоток межевого перца",9), "ward":("Сусло воротного караула",9)}
+POTIONS = {"heal":("Малая аптечная мера",14), "fury":("Глоток межевого перца",23), "ward":("Сусло воротного караула",23)}
 POTIONS.update({
-    "regen":("Белильная притирка",15), "strongheal":("Большая аптечная мера",23),
-    "venom":("Лужская горечь",27), "iron":("Медницкая закалка",48),
-    "rage":("Настой ночного перегона",48), "seal":("Грамота о запрете",42),
-    "recall":("Выпись второй записи",64),
+    "regen":("Белильная притирка",38), "strongheal":("Большая аптечная мера",57),
+    "venom":("Лужская горечь",68), "iron":("Медницкая закалка",113),
+    "rage":("Настой ночного перегона",113), "seal":("Грамота о запрете",98),
+    "recall":("Выпись второй записи",143),
 })
 REQUIREMENT = dict(heal=1,fury=1,ward=1,regen=10,strongheal=20,venom=20,iron=40,rage=40,seal=10,recall=25)
 HEALS = ("heal","strongheal")
@@ -26,7 +26,10 @@ DESCR = dict(heal="сразу +12 + 2 × уровень сил", fury="усил�
              seal="отключает особенность врага на текущий раунд",recall="немедленно восстанавливает твоё классовое умение")
 ROOM_DROP = {"raid":(0.10,0.15,0.35),"vault":(0.15,0.22,0.50)}
 
-def equipment_chance(mode,n):
+def equipment_chance(mode,n,elite=False):
+    if elite:
+        if mode=="hunt": return 0.08
+        if mode=="raid" and n%3==2: return 0.45
     return 0.03 if mode=="hunt" else ROOM_DROP[mode][n%3]
 CURIOS = ("Амбарная гривна","Серебряная охотничья пряжка","Брошь полевой сестры",
           "Янтарная застёжка обоза","Медная цеховая печать","Тарнская жемчужина",
@@ -63,7 +66,7 @@ def scrap_value(z,n):
     return 3+BANDS[z]+n//3
 
 def key_price(z):
-    return 24+12*BANDS[z]
+    return {6:45,7:90,8:150}[z]
 
 def collect(h,z,n,roll,needed=None):
     if roll>=0.6: return ""
