@@ -6,6 +6,7 @@ from world import ORIGIN, RECIPES
 import city
 import haul
 import forks
+import directions
 from copy import deepcopy
 import secrets
 import time
@@ -15,7 +16,7 @@ CLASSES = {
     "nun": ("Сестра Ордена Матери", "Полевая перевязка", "лечит отряд"),
     "archer": ("Браконьер", "Меткий выстрел", "наносит усиленный урон"),
     "smith": ("Мастер Гильдии инженеров", "Раскол брони", "в этом раунде усиливает свой удар и удары всех атакующих союзников"),
-    "witch": ("Ученица аптекаря", "Отравленный клинок", "ослабляет ответный удар и наносит урон"),
+    "witch": ("Ученица аптекаря", "Отравленный клинок", "оставляет яд на два следующих раунда"),
 }
 HISTORIES = {
  "guard":"Старая гвардия держала ворота Гусзка, когда из-за стены звали по именам. Из того караула выжили немногие. Жалованье кончилось, совет распущен, и принимать присягу теперь некому. Но стоит гвардейцу откинуть плащ и показать потёртый нагрудный знак, как на ратушной лестнице ему уступают место у огня.",
@@ -37,7 +38,7 @@ TALENTS = {
 }
 ROLE_TEXT = {"guard":"+3 защиты отряду при «Стене щитов»","nun":"+3 здоровья отряду при перевязке",
              "archer":"+3 урона меткому выстрелу","smith":"+1 урона инженеру и каждому атакующему союзнику при расколе",
-             "witch":"+2 урона и +1 защиты отравленному клинку"}
+             "witch":"+2 к силе дозы яда"}
 def ranks(h):
     return h.get("ranks",[0,0,0])
 
@@ -64,6 +65,7 @@ def training(h,uid):
     for j,(name,rank) in enumerate(zip(TALENTS[h["class"]],ranks(h))):
         lines.append(f"{name} · {rank}/5 · {desc[j]} за ранг")
         if points(h)>0 and rank<5: rows.append([btn("Улучшить · "+name,f"train:{uid}:{j}:{rank}")])
+    if level(h)>=10:rows.append([btn("Направление","direction")])
     rows.append([btn("К герою","nav:hero")])
     return reply("\n".join(lines),rows)
 
@@ -245,13 +247,25 @@ def return_route(r):
         half=1 if r["mode"]=="vault" else r["choice"]
     return [[btn("Вернуться · "+area_name(z,half),f"travel:{z}:{half}")]]
 
+def against_target(value, caster, enemy):
+    return value*100//(100+10*max(0,enemy-caster-1))
+
+
+def party_amount(r,base):
+    levels=r.get("entry_levels")
+    if not levels:return base*len(r["party"])
+    # A comparable party retains full difficulty; a weaker companion adds less.
+    reference=min(rank(r["z"],target(r)),max(levels))
+    return sum(against_target(base,lv,reference) for lv in levels)
+
+
 def maximum(r):
     n = target(r)
     if r["mode"]=="vault": return 25+3*rank(r["z"],n)
     if r["mode"]=="hunt":
         hp=len(r["party"])*(24+4*r.get("road_level",rank(r["z"],n)))
         return (hp*125+50)//100 if r.get("elite") else hp
-    hp=len(r["party"])*(14+2*rank(r["z"],n)+(5 if n>=3 else 0))
+    hp=party_amount(r,14+2*rank(r["z"],n)+(5 if n>=3 else 0))
     return (hp*130+50)//100 if r.get("elite") else hp
 
 def title(r):
@@ -264,7 +278,7 @@ def actions_text(s,r,finished=False):
     for uid in r["party"]:
         h = s["heroes"][uid]
         move = r["moves"].get(uid)
-        action = {"hit":"удар","block":"блок","skill":CLASSES[h["class"]][1]}.get(move)
+        action = {"extra":directions.EXTRA.get(h["class"]),"hit":"удар","block":"блок","skill":CLASSES[h["class"]][1]}.get(move)
         if action is None:
             action = "автоблок" if finished else "выбирает ход"
         marker = "" if finished else ("✓ " if move else "⏳ ")
@@ -303,7 +317,7 @@ def vote_route(s,r,uid,op):
         path=max(counts,key=counts.get)
     r["route"]=path
     del r["votes"]
-    if path=="pits": r["enemy"]+=4*len(r["party"])
+    if path=="pits": r["enemy"]+=party_amount(r,4)
     r["log"]=forks.choose(s,r,choices[path])
     r["deadline"]=time.time()+60
     return board(s,r,uid)
@@ -368,7 +382,7 @@ def board(s,r,viewer=None):
     effects = []
     for uid,values in r.get("buffs",{}).items():
         for k,end in values.items():
-            if end>=r["round"]: effects.append(f"{s['heroes'][uid]['name']} · {POTIONS[k][0]} ({end-r['round']+1})")
+            if k in POTIONS and end>=r["round"]: effects.append(f"{s['heroes'][uid]['name']} · {POTIONS[k][0]} ({end-r['round']+1})")
     skill_label="Умение · 4 эн."
     stamina_line = ""
     if viewer in r["party"]:
@@ -387,6 +401,7 @@ def board(s,r,viewer=None):
                  f"{encounter_trait(z,n)[0]} · {encounter_trait(z,n)[1]}\n\nОтряд: {r['hp']}/{r['maxhp']} ХП{stamina_line}{active}"
                  + (divider + log if log else "") + divider + f"Действия сейчас · {ready}/{len(r['party'])} готовы\n{actions_text(s,r)}",
                  [[btn(t,f"{a}:{suffix}") for t,a in (("Удар","hit"),("Блок","block"),(skill_label,"skill"))],
+                  *([[btn(directions.EXTRA[h["class"]]+f" · {status}",f"extra:{suffix}")]] if viewer in r["party"] and h.get("direction")=="b" and h["class"] in directions.EXTRA else []),
                   [btn(label,f"{k}:{suffix}") for k,label in (("heal","Лечение"),("fury","Ярость"),("ward","Кожа"))],
                   [btn("Завершить по таймеру",f"finish:{suffix}")]] + supply_rows + confirm)
 
@@ -421,20 +436,26 @@ def resolve(s,r,viewer=None):
     boss=r["mode"]!="hunt" and r["room"]==2
     answers=r.get("boss_answers",0)
     rolls = {}
-    split_bonus = 0
+    split_bonus = split_raw = 0
     poisons = {}
+    poison=r.setdefault("blade_poison",{})
+    traps=r.setdefault("snares",{})
+    wall=counter=weakening=0
+    shield+=r.pop("wall_strength",0)
     stamina = r.setdefault("energy",{})
     for i,h in zip(r["party"],party):
         lv = level(h)
         a = r["moves"].get(i,"block")
         cap = energy(h)
-        stamina[i] = min(cap,stamina.get(i,cap)+(-4 if a=="skill" else 3 if a=="block" else 1))
+        stamina[i] = min(cap,stamina.get(i,cap)+(-4 if a in ("skill","extra") else 3 if a=="block" else 1))
         effects = r.get("buffs",{}).get(i,{})
         if effects.get("regen",0)>=r["round"]: heal += city.restore(4+lv//3,city.buff(s))*(110 if forks.active(h,"cup") else 100)//100
         if effects.get("venom",0)>=r["round"]: poisons[i] = 6+lv//3
         if effects.get("iron",0)>=r["round"]: shield += 12+lv
         elif effects.get("ward",0)>=r["round"]: shield += 5+lv//2
+        if effects.get("bandage_until",0)>=r["round"]:heal+=effects.get("bandage",0)
         if a=="block":
+            r.setdefault("buffs",{}).setdefault(i,{})["blocked"]=r["round"]
             if h["gear"][LEFT]==SEAM_SHIELD and i not in r.get("seam_used",[]):
                 r.setdefault("seam_ready",{})[i]=True
             shield += 6+lv+stats(h)[1]//2+bonus(h,"guard")
@@ -444,52 +465,183 @@ def resolve(s,r,viewer=None):
         mastery = ranks(h)[1]
         if effects.get("rage",0)>=r["round"]: base += 12+lv
         elif effects.get("fury",0)>=r["round"]: base += 5+lv//2
-        if a=="skill":
+        if i in r.get("wedge_next",{}) and r["wedge_next"][i]<r["round"]:
+            base+=attack(h)//3
+            del r["wedge_next"][i]
+        spec=h.get("direction")
+        c=h["class"]
+        if a in ("skill","extra"):
             r["ready"][i] = r["round"]+2
             c = h["class"]
-            if c=="guard":
-                shield += 9+lv+3*mastery+bonus(h,"guard")
+            if a=="extra":
+                if c=="guard":
+                    if effects.get("blocked")==r["round"]-1:base+=base//3
+                    shield+=4+lv//3
+                elif c=="nun":
+                    base=max(1,base//2)
+                    weakening=max(weakening,against_target(2500,lv,enemy_lv))
+                elif c=="archer":
+                    traps[i]=against_target(2*base,lv,enemy_lv)
+                    continue
+                elif c=="witch":
+                    dose,turns=poison.pop(i,(0,0))
+                    poisons[i]=poisons.get(i,0)+2*dose*turns
+            elif c=="guard":
+                wall_power=12+lv+stats(h)[2]+3*mastery+bonus(h,"guard")
+                if spec=="a":
+                    wall_power=wall_power*5//4
+                    wall+=wall_power
+                shield+=wall_power
+                if len(party)==1:counter=against_target(base//3,lv,enemy_lv)
                 if h["gear"][LEFT]==SEAM_SHIELD and r.get("seam_ready",{}).pop(i,False):
                     shield+=4
                     r.setdefault("seam_used",[]).append(i)
-            elif c=="nun": heal += 10+lv+3*mastery+bonus(h,"medicine")
-            elif c=="archer": base += 7+lv+stats(h)[1]//2+3*mastery
-            elif c=="smith": split_bonus += 3+lv//2+mastery
+                continue
+            elif c=="nun":
+                treatment=city.restore(14+lv+stats(h)[3]+3*mastery+bonus(h,"medicine"),city.buff(s))
+                heal+=treatment
+                if spec=="a":r.setdefault("buffs",{}).setdefault(i,{}).update(bandage=treatment//4,bandage_until=r["round"]+2)
+                continue
+            elif c=="archer":
+                base+=7+lv+stats(h)[1]//2+3*mastery
+                if spec=="a" and 2*r["enemy"]<=maximum(r):base=base*5//4
+            elif c=="smith":
+                boost=3+lv//2+mastery
+                boost=boost*4//3 if spec=="a" else boost
+                effective=against_target(boost,lv,enemy_lv)
+                if (effective,boost)>(split_bonus,split_raw):
+                    split_bonus,split_raw=effective,boost
+                if spec=="b":r.setdefault("wedge_next",{})[i]=r["round"]
             else:
-                shield += 5+lv//2+mastery
-                base += 4+lv//2+2*mastery
+                dose=4+lv//2+2*mastery
+                if spec=="a" and i in poison:dose=dose*5//4
+                if i in poison:poisons[i]=poisons.get(i,0)+poison[i][0]
+                poison[i]=(dose,3)
+                base=base*3//4
         amount = random.randint(*bounds(base))
         critical = random.randrange(100)<crit(h)+(15 if boss and not answers and effect=="crit" else 0)
         if a=="hit" and not critical and forks.active(h,"measure") and i not in r.get("measured",[]):
             amount=bounds(base)[1]
             r.setdefault("measured",[]).append(i)
         rolls[i]=(amount*multiplier(h)//100 if critical else amount,critical)
+    for owner,(dose,turns) in list(poison.items()):
+        if turns<3:poisons[owner]=poisons.get(owner,0)+dose
+        if turns==1:del poison[owner]
+        else:poison[owner]=(dose,turns-1)
     sealed = r.get("sealed",0)==r["round"]
     group = faction(z,n)
     absorbs = group=="oath" or (group is None and n%3==1)
-    absorb = (2+enemy_lv//5)*len(party) if not sealed and absorbs and r["round"]%2==0 else 0
+    absorb = party_amount(r,2+enemy_lv//5) if not sealed and absorbs and r["round"]%2==0 else 0
     details=[]
     for i in r["party"]:
         amount,critical=rolls.get(i,(0,False))
-        if i in rolls: amount+=split_bonus
         amount+=poisons.get(i,0)
-        gap=max(0,enemy_lv-level(s["heroes"][i])-1)
-        amount=amount*100//(100+10*gap)
+        caster=level(s["heroes"][i])
+        amount=against_target(amount,caster,enemy_lv)
+        if i in rolls: amount+=min(split_bonus,against_target(split_raw,caster,enemy_lv))
         dmg+=amount
         if r["moves"].get(i)=="skill" and s["heroes"][i]["class"]=="archer":
             details.append(f"Меткий выстрел · {s['heroes'][i]['name']} нанёс {amount} урона до поглощения.")
         if critical:
             details.append(f"Критический удар · {s['heroes'][i]['name']}")
-    if split_bonus: details.append(f"Раскол брони · +{split_bonus} к каждому удару до поправки на уровень.")
+    if split_bonus: details.append(f"Раскол брони · +{split_bonus} к каждому удару максимум.")
     absorbed=min(absorb,dmg)
     dmg-=absorbed
     if absorbed: details.append(f"Защита врага поглотила {absorbed}.")
     r["enemy"] -= dmg
-    r["hp"] = min(r["maxhp"],r["hp"]+heal)
+    healed=min(heal,r["maxhp"]-r["hp"])
+    r["hp"]+=healed
     summary = f"Итоги раунда {r['round']}:\n"+actions_text(s,r,finished=True)
+    if healed:details.append(f"Восстановлено отряду: {healed} ХП.")
     if details: summary += "\n"+" · ".join(details)
     msg = f"{summary}\nОтряд нанёс {dmg} урона."
+    if r["enemy"]>0:
+        raw = 3+enemy_lv+(4+enemy_lv//4 if r["mode"]=="vault" else 0)
+        if r["mode"]=="hunt": raw -= max(0,enemy_lv-10)//2
+        if group=="cult" and not sealed and r["round"]%3==0:
+            for uid in r["party"]: stamina[uid]=max(0,stamina[uid]-1)
+            msg += " Счёт недостачи: −1 энергия каждому."
+        rush = (group=="robber" and r["round"]==1) or (group is None and n%3==0 and r["round"]%3==0)
+        wounded = group=="changed" or (group is None and n%3==2)
+        if not sealed and (rush or (wounded and 2*r["enemy"]<maximum(r))):
+            raw += 4+enemy_lv//3
+        if r.get("route")=="pits" and r["room"]==1: raw+=2
+        if boss and effect:
+            r["boss_answers"]=answers+1
+            if forks.key(r) in ("0_1","5_0") and answers==(2 if effect=="delay" else 0):
+                raw+=4+enemy_lv//3
+                msg+=" Босс нанёс тяжёлый удар."
+            if forks.key(r)=="3_0" and not answers:
+                if effect=="strap": msg+=" Упряжь распалась в руках Смотрителя."
+                else:
+                    for uid in stamina: stamina[uid]=max(0,stamina[uid]-2)
+                    msg+=" Ремни затянулись: −2 энергии."
+        reference=max(r["entry_levels"]) if r.get("entry_levels") else sum(level(h) for h in party)//len(party)
+        gap=max(0,enemy_lv-reference-1)
+        raw=raw*(100+12*gap)//100
+        if r.pop("bell_raised",False):
+            if any(r["moves"].get(i,"block")=="block" for i in r["party"]): msg+=" Удар гири принят на блок."
+            else:
+                raw+=enemy_lv//2
+                msg+=" Гиря ударила с размаху."
+        if r.get("elite"):
+            raw=(raw*(110 if r["mode"]=="hunt" else 112)+50)//100
+        incoming=random.randint(*bounds(party_amount(r,raw)))
+        if weakening:
+            incoming=incoming*(10000-weakening)//10000
+            msg+=f" Болевая точка: −{weakening/100:.1f}% к ответу."
+        taken=max(0,incoming-shield)
+        if wall and min(incoming,wall)>=wall//3:
+            r["wall_strength"]=wall//3
+        if boss and effect=="bell" and answers==1:r["bell_raised"]=True
+        if boss and not answers:
+            if effect=="skip" or (effect=="block" and any(r["moves"].get(i,"block")=="block" for i in r["party"])):
+                taken=0
+                msg+=" Выбранный путь сорвал ответ босса."
+            if effect=="half":taken//=2
+        if effect=="roomskip" and r["room"]==1 and not r.get("roomskip_used"):
+            taken=0
+            r["roomskip_used"]=True
+            msg+=" Носильщик ещё выбирается из складок сукна."
+        if r.pop("cut_chain",False):
+            taken=0
+            msg+=" Мастер дёрнул крюк. Оборванная цепь рухнула на пол."
+        if taken and r.get("first_hit_room")!=r["room"]:
+            r["first_hit_room"]=r["room"]
+            if city.buff(s)=="papers":
+                taken=taken*85//100
+                msg+=" Караульный строй смягчил первый удар."
+        if taken and not r.get("rivet_used"):
+            owners=sum(forks.active(h,"rivet") for h in party)
+            if owners:
+                taken=taken*(100*len(party)-20*owners)//(100*len(party))
+                r["rivet_used"]=True
+        if taken>=r["hp"] and any(forks.active(h,"reprieve") for h in party):
+            for h in party:
+                if forks.active(h,"reprieve"): h.pop("route_relic",None)
+            taken=max(0,r["hp"]-1)
+            msg+=" Вторая запись сохранила отряду 1 ХП."
+        r["hp"] -= taken
+        msg += f" Ответный удар — {taken}."
+        if r["hp"]<=0:
+            del s["fights"][r["id"]]
+            for member in party:
+                member["returning_from_fight"] = True
+                member.pop("hunting_ground",None)
+                member.pop("coast_trip",None)
+            if r.get("legacy_safe"):
+                return reply("Отряд погиб. В этом перенесённом походе потерь нет.\n"+msg)
+            lost=" Добыча этого похода потеряна." if r["mode"]!="hunt" else ""
+            return reply("Отряд погиб. Герои вернулись в Гусзк."+lost+"\n"+msg+"\n"+"\n".join(death(h) for h in party))
+        retaliation=sum(traps.values())+(counter if shield and incoming else 0)
+        traps.clear()
+        if retaliation:
+            r["enemy"]-=retaliation
+            msg+=f" Ответ героя — {retaliation}."
     if r["enemy"]<=0:
+        poison.clear()
+        traps.clear()
+        r.pop("weakened",None)
         record_win(s,r["party"],z,n,r["mode"])
         dungeon = r["mode"]!="hunt"
         city_news = city.victory(s,r["party"],z,n,r["mode"],fight=r if dungeon else None)
@@ -588,77 +740,6 @@ def resolve(s,r,viewer=None):
         r["hp"] = min(r["maxhp"],r["hp"]+sum(4+level(h)//2 for h in party))
         msg += " Враг повержен. Отряд перевёл дух."
         if scraps: msg += "\nНаходки до выхода: "+" · ".join(scraps)
-    else:
-        raw = 3+enemy_lv+(4+enemy_lv//4 if r["mode"]=="vault" else 0)
-        if r["mode"]=="hunt": raw -= max(0,enemy_lv-10)//2
-        if group=="cult" and not sealed and r["round"]%3==0:
-            for uid in r["party"]: stamina[uid]=max(0,stamina[uid]-1)
-            msg += " Счёт недостачи: −1 энергия каждому."
-        rush = (group=="robber" and r["round"]==1) or (group is None and n%3==0 and r["round"]%3==0)
-        wounded = group=="changed" or (group is None and n%3==2)
-        if not sealed and (rush or (wounded and 2*r["enemy"]<maximum(r))):
-            raw += 4+enemy_lv//3
-        if r.get("route")=="pits" and r["room"]==1: raw+=2
-        if boss and effect:
-            r["boss_answers"]=answers+1
-            if forks.key(r) in ("0_1","5_0") and answers==(2 if effect=="delay" else 0):
-                raw+=4+enemy_lv//3
-                msg+=" Босс нанёс тяжёлый удар."
-            if forks.key(r)=="3_0" and not answers:
-                if effect=="strap": msg+=" Упряжь распалась в руках Смотрителя."
-                else:
-                    for uid in stamina: stamina[uid]=max(0,stamina[uid]-2)
-                    msg+=" Ремни затянулись: −2 энергии."
-        gap=max(0,enemy_lv-sum(level(h) for h in party)//len(party)-1)
-        raw=raw*(100+12*gap)//100
-        if r.pop("bell_raised",False):
-            if any(r["moves"].get(i,"block")=="block" for i in r["party"]): msg+=" Удар гири принят на блок."
-            else:
-                raw+=enemy_lv//2
-                msg+=" Гиря ударила с размаху."
-        if r.get("elite"):
-            raw=(raw*(110 if r["mode"]=="hunt" else 112)+50)//100
-        taken = max(0,random.randint(*bounds(raw*len(party)))-shield)
-        if boss and effect=="bell" and answers==1:r["bell_raised"]=True
-        if boss and not answers:
-            if effect=="skip" or (effect=="block" and any(r["moves"].get(i,"block")=="block" for i in r["party"])):
-                taken=0
-                msg+=" Выбранный путь сорвал ответ босса."
-            if effect=="half":taken//=2
-        if effect=="roomskip" and r["room"]==1 and not r.get("roomskip_used"):
-            taken=0
-            r["roomskip_used"]=True
-            msg+=" Носильщик ещё выбирается из складок сукна."
-        if r.pop("cut_chain",False):
-            taken=0
-            msg+=" Мастер дёрнул крюк. Оборванная цепь рухнула на пол."
-        if taken and r.get("first_hit_room")!=r["room"]:
-            r["first_hit_room"]=r["room"]
-            if city.buff(s)=="papers":
-                taken=taken*85//100
-                msg+=" Караульный строй смягчил первый удар."
-        if taken and not r.get("rivet_used"):
-            owners=sum(forks.active(h,"rivet") for h in party)
-            if owners:
-                taken=taken*(100*len(party)-20*owners)//(100*len(party))
-                r["rivet_used"]=True
-        if taken>=r["hp"] and any(forks.active(h,"reprieve") for h in party):
-            for h in party:
-                if forks.active(h,"reprieve"): h.pop("route_relic",None)
-            taken=max(0,r["hp"]-1)
-            msg+=" Вторая запись сохранила отряду 1 ХП."
-        r["hp"] -= taken
-        msg += f" Ответный удар — {taken}."
-        if r["hp"]<=0:
-            del s["fights"][r["id"]]
-            for member in party:
-                member["returning_from_fight"] = True
-                member.pop("hunting_ground",None)
-                member.pop("coast_trip",None)
-            if r.get("legacy_safe"):
-                return reply("Отряд погиб. В этом перенесённом походе потерь нет.\n"+msg)
-            lost=" Добыча этого похода потеряна." if r["mode"]!="hunt" else ""
-            return reply("Отряд погиб. Герои вернулись в Гусзк."+lost+"\n"+msg+"\n"+"\n".join(death(h) for h in party))
     r.update(round=r["round"]+1,moves={},used={},heal_requests={},deadline=time.time()+60,log=msg)
     return board(s,r,viewer)
 
@@ -977,6 +1058,7 @@ def play(s,uid,name,cmd):
                 zone_key = str(r["z"])
                 if h["keys"].get(zone_key,0)<1: return reply("Нужен ключ от этого тайника. Купи его у ключницы в городе.")
                 h["keys"][zone_key] -= 1
+            if r["mode"]=="raid":r["entry_levels"]=[level(heroes[i]) for i in r["party"]]
             hp = sum(health(heroes[i]) for i in r["party"])
             for member in r["party"]:
                 heroes[member]["shop_rev"] += 1
@@ -1042,7 +1124,12 @@ def play(s,uid,name,cmd):
             if uid in r.get("scroll_users",[]): return reply("Ты уже читал свиток в этом походе.")
             if op=="seal":
                 if r.get("sealed",0)==r["round"]: return reply("Враг уже скован печатью.")
-                r["sealed"] = r["round"]
+                effective=against_target(10000,level(h),r.get("road_level",rank(r["z"],target(r))))
+                if effective==10000 or random.randrange(10000)<effective:
+                    r["sealed"]=r["round"]
+                else:
+                    r["log"]+=" Враг устоял против печати."
+
             else:
                 if r["ready"].get(uid,0)<=r["round"]: return reply("Твоё умение уже готово.")
                 r["ready"][uid] = r["round"]
@@ -1060,9 +1147,12 @@ def play(s,uid,name,cmd):
     if op=="finish":
         if time.time()<r["deadline"]: return reply("Минута ещё не прошла.")
         return resolve(s,r,uid)
-    if op not in ("hit","block","skill"): return reply("Выбери действие на карточке боя.")
-    if op=="skill" and r.get("energy",{}).get(uid,energy(h))<4: return reply("Нужно 4 энергии. Удар вернёт 1, блок — 3.")
-    if op=="skill" and r["ready"].get(uid,0)>r["round"]: return reply(f"Умение будет доступно в раунде {r['ready'][uid]}.")
+    if op=="extra" and (level(h)<10 or h.get("direction")!="b" or h["class"] not in directions.EXTRA):return reply("Этот приём недоступен.")
+    if op=="extra" and h["class"]=="witch" and uid not in r.get("blade_poison",{}):return reply("Сначала отрави цель клинком.")
+    if op=="skill" and h["class"]=="nun" and r["hp"]==r["maxhp"]:return reply("Отряд здоров. Выбери удар или блок.")
+    if op not in ("hit","block","skill","extra"): return reply("Выбери действие на карточке боя.")
+    if op in ("skill","extra") and r.get("energy",{}).get(uid,energy(h))<4: return reply("Нужно 4 энергии. Удар вернёт 1, блок — 3.")
+    if op in ("skill","extra") and r["ready"].get(uid,0)>r["round"]: return reply(f"Умение будет доступно в раунде {r['ready'][uid]}.")
     r["moves"][uid] = op
     if len(r["moves"])==len(r["party"]): return resolve(s,r,uid)
     return board(s,r,uid)

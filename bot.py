@@ -1,4 +1,5 @@
 """Telegram transport. Run one polling process per token."""
+import directions
 import admin_panel
 import hashlib
 import alpha
@@ -87,7 +88,7 @@ MENU = [
     [("Карта","zones"),("Подземелья","dungeons"),("Отряды","teams")],
     [("Кодекс","codex")],
 ]
-ACTIONS = {"patha","pathb","pathok","coinok","faceboss","turnback","exitfinish","pits","loft","closevote","join","go","leave","hit","block","skill","finish","heal","healok","ward","fury"} | set(POTIONS)
+ACTIONS = {"patha","pathb","pathok","coinok","faceboss","turnback","exitfinish","pits","loft","closevote","join","go","leave","hit","block","skill","extra","finish","heal","healok","ward","fury"} | set(POTIONS)
 
 def init_cards(db):
     db.execute("CREATE TABLE IF NOT EXISTS trade_screen(uid TEXT PRIMARY KEY, view TEXT NOT NULL)")
@@ -384,6 +385,8 @@ def shared_action(db,state,chat,uid,topic,cmd,cb,m,actor):
                     return card("В городскую книгу внесён "+value+".",[[btn("Продолжить","nav:resume")]])
         return alpha.prompt(db,uid,chat_id,topic,cb,reason)
     mine=next((r for r in state["fights"].values() if uid in r["party"]),None)
+    if directions.pending(hero) or (cmd.startswith("direction") and hero and level(hero)>=10):
+        return card(*directions.choose(hero,cmd,bool(mine)))
     if mine and cmd.startswith("new:"):
         return card("У тебя уже есть поход. Можно открыть его в этой группе.",
                     [[btn("Открыть поход","nav:current")],[btn("‹ Назад в меню","nav:start")]])
@@ -521,7 +524,7 @@ def process(db, update, username):
             if uid in state["heroes"]:
                 db.execute("INSERT OR REPLACE INTO chat_seen VALUES(?,?)",(uid,time.time()))
             before_offers=recipients(state)
-            if cb and cmd.startswith("page:") and db.execute("SELECT 1 FROM alpha_names WHERE uid=?",(uid,)).fetchone():
+            if cb and not directions.pending(state["heroes"].get(uid)) and cmd.startswith("page:") and db.execute("SELECT 1 FROM alpha_names WHERE uid=?",(uid,)).fetchone():
                 rec = db.execute("SELECT view FROM card_media WHERE chat=? AND message=?",(chat["id"],m["message_id"])).fetchone()
                 parts = cmd.split(":")
                 view = json.loads(rec[0]) if rec and rec[0] else None
