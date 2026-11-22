@@ -172,6 +172,9 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     elif cmd=="hero" and hero:
         msg=f"{CLASSES[hero['class']][0]} · ур. {level(hero)}"
         rows=[[btn("Лист персонажа","nav:diary"),btn("Сумка","nav:bag")]]
+        if hero.get("profession"):
+            trade=hero["profession"]["trade"]
+            rows.append([btn("Кузнечное дело" if trade=="forge" else "Портняжное дело","work:"+trade)])
     elif cmd=="codex":
         msg="Кодекс"
         rows=[[btn("Хроника","nav:lore"),btn("Бестиарий","nav:book"),btn("Правила","nav:help")],[btn("Найденные записки","nav:notes")]]
@@ -210,6 +213,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         watch=watches.get(uid)
         if not isinstance(watch,dict) or (watch["chat"]==chat and (watch.get("topic") or 0)==(topic or 0)):
             watches.pop(uid,None)
+    result_rows=list(rows) if ended else []
     menu = [btn("☰ Меню","nav:start")]
     if op in ("diary","bag") and hero:
         rows=rows+[[btn("‹ Герой","nav:hero")]]
@@ -247,7 +251,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
                 watch={"fight":watch,"chat":previous.get("chat",chat),"topic":previous.get("topic",topic)}
             if who==uid or not watch or watch["fight"]!=battle_id: continue
             if ended:
-                other_text,other_rows = msg,[]
+                other_text,other_rows = msg,result_rows
                 watches.pop(who,None)
             else:
                 other_text,other_rows = board(state,fights[battle_id],who)
@@ -301,7 +305,7 @@ def screen_picture(command, hero):
         action = args[-1]
         if action.startswith("buy-"):
             return "scribe" if action[4:] in SCROLLS else "apoth"
-        for prefix, scene in (("sellpage","sell"),("gear-","sell"),("cash","sell"),
+        for prefix, scene in (("supply-","sell"),("sellpage","sell"),("gear-","sell"),("cash","sell"),
                               ("key-","keys"),("upgrade","bags"),("stock-","armourer")):
             if action.startswith(prefix):
                 return scene
@@ -553,7 +557,7 @@ def process(db, update, username):
 def combat_entities(text):
     patterns = (
         ("bold",r"^Доступен обмен!$"),
-        ("bold",r"\[(Оружие|Броня|Аксессуары|Задания и ремёсла|Задания|Записки|Монеты|Трофеи|Хлам)\]"),
+        ("bold",r"\[(Оружие|Броня|Аксессуары|Задания и ремёсла|Задания|Записки|Монеты|Трофеи|Материал|Для рецепта|Образец|Хлам)\]"),
         ("bold", r"^(?:[1-4]\. .+|Лавка Мартина|Аптека Лады|Писец Тиш|В бою|Характеристики|Поручения коменданта|Ремесленники лагеря|Материалы|Где искать|Награда|Добыча)$"),
         ("bold", r"^([0-9]+ мед\.)  ·"),
         ("bold", r"^.+ · раунд [0-9]+$"),
@@ -722,7 +726,9 @@ def main():
     db.execute("CREATE TABLE IF NOT EXISTS profile_state(key TEXT PRIMARY KEY,applied TEXT,retry REAL)")
     with db:
         db.execute("BEGIN IMMEDIATE")
-        alpha.save(db,alpha.load(db))
+        world_state=alpha.load(db)
+        migrate(world_state)
+        alpha.save(db,world_state)
     localchat.serve(database,TOKEN)
     print(f"Мёртвая мера · {alpha.RELEASE} · общий мир",flush=True)
     next_prune = 0

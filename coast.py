@@ -7,6 +7,7 @@ import time
 
 from market import asking_price
 from quests import copper, SHIFT, details, progress
+from world import gear_slot, wear_level, ORIGIN, suitable, RARITY, gear_names
 from world import item_slot_label, category, SEAM_SHIELD, encounter_area, BANDS, CLASS_PIECES, HUNT_IDS, SCRAPS, SLOTS, ZONES, faction, gear_stat, level, monster, rank, strength, tier_name
 
 MASTERS={"veya":"Шорница Вея","hariton":"Оружейник Харитон"}
@@ -27,8 +28,9 @@ def row(label,cmd):
 
 def candidates(h,slot):
     band=(level(h)-1)//10
-    return [(z,k) for (z,k),p in CLASS_PIECES.items() if BANDS[z]==band and p[1]==slot
-            and p[0]!=SEAM_SHIELD and p[2]==h["class"] and p[3] in (0,1)]
+    return [(z,k) for (z,k),source in ORIGIN.items() if BANDS[z]==band and gear_slot(z,k)==slot
+            and source in ("hunt","quest") and suitable(z,k,h["class"]) and wear_level(z,k)<=level(h)]
+
 
 def offer(h,slot):
     lv=level(h)
@@ -139,13 +141,13 @@ def craft(h,args,active=None):
         if len(args)==3:
             return "Грамота покрывает работу и материалы. Выбери ячейку.",[row(SLOTS[i],prefix+":writ:"+ticket+":"+str(i)) for i in SLOTS_BY_MASTER[m]]+[back]
         if args[3].isdigit() and int(args[3]) in SLOTS_BY_MASTER[m]:
-            pool=[p for p in candidates(h,int(args[3])) if CLASS_PIECES[p][0] not in h["items"]]
+            pool=[p for p in candidates(h,int(args[3])) if gear_names(p[0])[p[1]] not in h["items"]]
             if wait:note="Мастер ещё занят. Грамота остаётся у тебя."
             elif not pool:note="Все варианты этой ячейки уже есть. Грамота остаётся у тебя."
             else:
                 tier=int(random.random()<0.2)
-                z,k=random.choice([p for p in pool if CLASS_PIECES[p][3]==tier] or pool)
-                item=CLASS_PIECES[z,k][0]
+                z,k=random.choice([p for p in pool if RARITY[p]==tier] or pool)
+                item=gear_names(z)[k]
                 h["items"][item]=[gear_stat(z,k),strength(z,k)]
                 del writs[ticket]
                 timers[m]=now+900
@@ -170,12 +172,12 @@ def craft(h,args,active=None):
             elif h["wallet"]<fee(order,active) or any(h["junk"].get(k,0)<v for k,v in order["materials"].items()):
                 note="Для заказа ещё нужны материалы или медь."
             else:
-                pool=[(z,k) for z,k in candidates(h,order["slot"]) if CLASS_PIECES[z,k][0] not in h["items"]]
+                pool=[(z,k) for z,k in candidates(h,order["slot"]) if gear_names(z)[k] not in h["items"]]
                 if not pool: note="У тебя уже есть все варианты этого изделия. Можно отменить заказ."
                 else:
                     tier=int(random.random()<0.2)
-                    z,k=random.choice([p for p in pool if CLASS_PIECES[p][3]==tier] or pool)
-                    item=CLASS_PIECES[z,k][0]
+                    z,k=random.choice([p for p in pool if RARITY[p]==tier] or pool)
+                    item=gear_names(z)[k]
                     h["items"][item]=[gear_stat(z,k),strength(z,k)]
                     for key,v in order["materials"].items():
                         h["junk"][key]-=v
@@ -194,4 +196,4 @@ def craft(h,args,active=None):
         lines.append("Выбери ячейку для изделия. Оба кольца подходят для любой кольцевой ячейки.")
         rows=[row(SLOTS[i] if i!=7 else "Кольцо",prefix+":preview:"+str(i)) for i in SLOTS_BY_MASTER[m]]
     rows.extend(row("Предъявить грамоту",prefix+":writ:"+k) for k,v in writs.items() if v in (m,"guild"))
-    return "\n".join(lines),rows+[row("К кострам","road")]
+    return "\n".join(lines),rows+[row("Кузнечное дело" if m=="hariton" else "Портняжное дело","work:"+("forge" if m=="hariton" else "sew")),row("К кострам","road")]

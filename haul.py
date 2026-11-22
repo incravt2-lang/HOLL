@@ -3,6 +3,9 @@ from copy import deepcopy
 from world import ITEM_CODES, trade_value
 
 def carry(hero, bag):
+    for key,qty in bag.get("supplies",{}).items():
+        stock=hero.setdefault("supplies",{})
+        stock[key]=stock.get(key,0)+qty
     for key, qty in bag.get("junk", {}).items():
         hero["junk"][key] = hero["junk"].get(key, 0) + qty
     for item, stats in bag.get("items", {}).items():
@@ -26,6 +29,11 @@ def preview(hero,bag):
 def store(bag,before,after):
     for field in ("items","spare_drops"):
         bag.setdefault(field,{}).update({k:v for k,v in after.get(field,{}).items() if k not in before.get(field,{})})
+    for k,v in after.get("supplies",{}).items():
+        delta=v-before.get("supplies",{}).get(k,0)
+        if delta:
+            counts=bag.setdefault("supplies",{})
+            counts[k]=counts.get(k,0)+delta
     for k,v in after["junk"].items():
         delta=v-before["junk"].get(k,0)
         if delta:

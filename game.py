@@ -1,6 +1,8 @@
 from world import SEAM_SHIELD, wear_level, is_humanoid, trade_value
 """Rules for one group's campaign. All identifiers in saved JSON are strings."""
 import random
+import workshops
+from world import ORIGIN, RECIPES
 import city
 import haul
 import forks
@@ -108,19 +110,23 @@ def reply(text, rows=()):
     return text, list(rows)
 
 def migrate(s):
-    if s.get("version")==11: return
-    if s.get("version") not in (7,8,9,10): migrate_names(s)
+    if s.get("version")==12: return
+    from_previous=s.get("version")==11
+    if s.get("version") not in (7,8,9,10,11): migrate_names(s)
     def refresh(items):
         for name in items:
             z,k=map(int,ITEM_CODES[name].split("."))
-            items[name]=[gear_stat(z,k),strength(z,k)]
-    for hero in s["heroes"].values():
+            if not from_previous or (z,k) in ORIGIN:
+                items[name]=[gear_stat(z,k),strength(z,k)]
+    candidates=list(s["heroes"].values())
+    for alternatives in s.get("choices",{}).values():candidates.extend(alternatives.values())
+    for hero in candidates:
         refresh(hero["items"])
-        enforce_wear_level(hero)
+        if not from_previous:enforce_wear_level(hero)
     for fight in s.get("fights",{}).values():
         for bag in fight.get("haul",{}).values():
             refresh(bag.get("items",{}))
-    s["version"]=11
+    s["version"]=12
 
 def enforce_wear_level(hero):
     for slot,item in enumerate(hero["gear"]):
@@ -226,6 +232,16 @@ def death(h):
 def target(r):
     if r["mode"]=="vault": return 9+r["room"]
     return r.get("legacy_target",r["choice"]) if r["mode"]=="hunt" else 3+3*r["choice"]+r["room"]
+
+def return_route(r):
+    if "road_level" in r:
+        return [[btn("Продолжить дорогу","road")]]
+    z=r["z"]
+    if r["mode"]=="hunt":
+        half=int((rank(z,target(r))-1)%10>=5)
+    else:
+        half=1 if r["mode"]=="vault" else r["choice"]
+    return [[btn("Вернуться · "+area_name(z,half),f"travel:{z}:{half}")]]
 
 def maximum(r):
     n = target(r)
@@ -367,17 +383,25 @@ def board(s,r,viewer=None):
                   [btn("Завершить по таймеру",f"finish:{suffix}")]] + supply_rows + confirm)
 
 def roll_equipment(z,n,mode,cls=None):
-    tier=random.choices(range(5),weights=TIER_WEIGHTS[mode])[0]
-    return random.choice([k for k in loot_slots(z,n,cls) if RARITY[z,k]==tier])
+    pools=equipment_pools(z,n,mode,cls)
+    return random.choice(random.choices(list(pools.values()),weights=[TIER_WEIGHTS[mode][t] for t in pools])[0])
+
+def equipment_pools(z,n,mode,cls):
+    pools={}
+    for k in loot_slots(z,n,cls):
+        pools.setdefault(RARITY[z,k],[]).append(k)
+    return pools
 
 COIN_CHANCE = 0.35
 
 def loot_description(z,n,mode,cls=None):
-    lines = []
-    for tier,weight in enumerate(TIER_WEIGHTS[mode]):
-        names="\n".join("• "+gear_names(z)[k] for k in loot_slots(z,n,cls) if RARITY[z,k]==tier)
-        pct=f"{equipment_chance(mode,n)*weight/10:.3f}".rstrip("0").rstrip(".").replace(".",",")
-        lines.append(f"{TIERS[tier]} · {pct}%\n{names}")
+    lines=[]
+    pools=equipment_pools(z,n,mode,cls)
+    total=sum(TIER_WEIGHTS[mode][t] for t in pools)
+    for tier,slots in sorted(pools.items()):
+        chance=100*equipment_chance(mode,n)*TIER_WEIGHTS[mode][tier]/total
+        lines.append(f"{TIERS[tier]} · {chance:.2f}%\n"+"\n".join("• "+gear_names(z)[k] for k in slots))
+    lines.append("Материалы ремесла · "+("обломки упряжи" if is_humanoid(z,n) else "шкура"))
     return "\n\n".join(lines)
 
 def resolve(s,r,viewer=None):
@@ -470,6 +494,7 @@ def resolve(s,r,viewer=None):
         scraps = [city_news] if city_news else []
         for who,h in zip(r["party"],projected):
             needed=needs(s,who)
+            scraps.extend(f"{h['name']}: {material}" for material in workshops.drops(h,z,n,r["mode"],needed))
             if is_humanoid(z,n) and random.random() < COIN_CHANCE:
                 copper = random.randint(1, 3)
                 h["wallet"] += copper
@@ -535,7 +560,7 @@ def resolve(s,r,viewer=None):
                 h["peak"] = max(level(h),h.get("peak",1))
                 up = f" · уровень {level(h)}!" if level(h)>lv else ""
                 lines.append(f"{h['name']}: +{xp} опыта{up}")
-            return reply("\n".join(lines),[[btn("Продолжить дорогу","road")]] if "road_level" in r else [])
+            return reply("\n".join(lines),return_route(r))
         if r.get("route")=="loft" and r["room"]==1:
             r["cut_chain"]=True
             msg+=" Отряд сорвал цепь с балки."
@@ -671,7 +696,8 @@ def area(mode,z,h,half=0):
 def gear_description(h,z,k,item):
     power=effective_power(h,item)
     unit="к удару" if h["items"][item][0]==0 else "ХП"
-    lines=[f"{item} — {item_slot_label(z,k)}", f"{tier_name(z,k)} · ур. {wear_level(z,k)}"]
+    legacy=" · наследие" if (z,k) not in ORIGIN else ""
+    lines=[f"{item}{legacy} — {item_slot_label(z,k)}", f"{tier_name(z,k)} · ур. {wear_level(z,k)}"]
     if item in ARM_BY_NAME:
         cls=ARM_BY_NAME[item][0]
         lines[1]+=" · "+CLASSES[cls][0]+(" · ½ силы" if cls!=h["class"] else "")
@@ -703,13 +729,13 @@ def inventory(h,uid,slot=None,page=0,needed=None,active=None):
             rows.insert(0,[btn(label,f"bag:{target}") for label,target in
                            (("‹ Новее",page-1),("Старее ›",page+1)) if 0<=target<pages])
         if h.get("buckles") or h.get("spare_drops"): rows.append([btn("Трофеи походов","spoils")])
-        rows.append([btn("Хлам и материалы","materials")])
+        rows.append([btn("Хлам и материалы","materials"),btn("Ремесленные запасы","work:forge:materials")])
         stock = [f"{v[0]} ×{h['potions'][k]}" for k,v in POTIONS.items() if h["potions"].get(k)]
         rows.append([btn("Скупщик","shop:"+uid+":"+revision(h,active)+":sell")])
         heading=f"Запасное снаряжение · {len(items)}"
         if pages>1: heading+=f" · стр. {page+1}/{pages}"
         return reply(heading+"\n\n"+("\n\n".join(overview) if overview else "Запасных вещей пока нет.")+
-                     f"\n\nХлам {units(h,needed)}/{capacity(h)} · {h['wallet']} мед.\nРасходники: "+(", ".join(stock) or "пусто"),rows)
+                     f"\n\nСумка {units(h,needed)}/{capacity(h)} · {h['wallet']} мед.\nРасходники: "+(", ".join(stock) or "пусто"),rows)
     worn = h["gear"][slot]
     label_worn = worn
     sources = []
@@ -719,7 +745,8 @@ def inventory(h,uid,slot=None,page=0,needed=None,active=None):
             if gear_slot(z,k)!=(7 if slot in RINGS else slot): continue
             if item not in h["items"]:
                 if (z,k) in CLASS_PIECES and CLASS_PIECES[z,k][2]!=h["class"]: continue
-                idx = next(n for n in (0,5,8,11) if k in loot_slots(z,n))
+                idx = next((n for n in (0,5,8,11) if k in loot_slots(z,n,h["class"])),None)
+                if idx is None:continue
                 if idx==0: idx = min((0,1,2),key=lambda n:abs(rank(z,n)-level(h)))
                 sources.append((abs(rank(z,idx)-level(h)),z,idx,item))
                 continue
@@ -783,6 +810,11 @@ def play(s,uid,name,cmd):
         return reply(f"Класс выбран.\n{name} · {CLASSES[p[2]][0]}")
     if not h: return reply("Выбери класс в разделе «Герой».")
     mine = next((r for r in fights.values() if uid in r["party"]),None)
+    if op=="work":
+        if p[1:]==["camp"]:
+            return play(s,uid,name,"road") if h.get("coast_trip") else reply("Лагерь остался позади.")
+        if p[1:]==["hero"]:return reply("Герой",[[btn("Лист персонажа","nav:diary"),btn("Сумка","nav:bag")]])
+        return workshops.view(h,p[1:],bool(mine),needs(s,uid))
     if op in ("road","roadfight","craft"):
         if mine: return board(s,mine,uid)
         if op=="road":
@@ -943,7 +975,7 @@ def play(s,uid,name,cmd):
             reward=forks.pay(s,r)
             del fights[r["id"]]
             for member in r["party"]: heroes[member]["returning_from_fight"]=True
-            return reply(f"Отряд вернулся · {title(r)}\nНаходки очищенных залов перенесены в сумки. Зачистка босса не засчитана."+("\n"+reward if reward else ""))
+            return reply(f"Отряд вернулся · {title(r)}\nНаходки очищенных залов перенесены в сумки. Зачистка босса не засчитана."+("\n"+reward if reward else ""),return_route(r))
         del r["exit_votes"]
         r.update(deadline=time.time()+60,log="Отряд вошёл в зал босса.")
         return board(s,r,uid)

@@ -178,9 +178,9 @@ def choose(s,r,path):
             found.append(collect(h,z,3+3*r["choice"],0.3,needs(s,uid)))
         if e in ("accessory","gear"):
             coins=0
-            pool=loot_slots(z,11,h["class"])
+            pool=loot_slots(z,9 if r["mode"]=="vault" else 3+3*r["choice"],h["class"])
             if e=="accessory":
-                pool=[k for (zone,k),p in CLASS_PIECES.items() if zone==z and p[2]==h["class"] and gear_slot(z,k) in (0,3,7) and p[3]<2]
+                pool=[k for k in pool if gear_slot(z,k) in (0,3,7)] or pool
                 tier=int(random.random()<0.2)
             else:tier=random.choices(range(5),weights=TIER_WEIGHTS["vault"])[0]
             k=random.choice([k for k in pool if RARITY[z,k]==tier] or pool)

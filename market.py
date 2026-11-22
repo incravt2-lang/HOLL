@@ -1,8 +1,10 @@
 """Per-hero economy. Buttons bind purchases to the customer and wallet revision."""
 from cargo import free
 from city import price
+import workshops
 import random
 import time
+from world import ORIGIN
 from world import class_power, trade_value, tier_name,bonus_label,CODE_ITEMS, ITEM_TRAITS, STAT_NAMES, SLOTS, gear_slot, gear_stat
 from world import SEAM_SHIELD, wear_level, level, BANDS, VAULTS, SCRAPS, gear_names, strength
 
@@ -32,7 +34,7 @@ CURIOS = ("Амбарная гривна","Серебряная охотничь
 
 def wares(hour,active=None):
     # Keep the usual four listings when the city unlocks the fifth.
-    pool = sorted(code for code,name in CODE_ITEMS.items() if name!=SEAM_SHIELD)[hour%2::2]
+    pool = sorted(code for code,name in CODE_ITEMS.items() if ORIGIN.get(tuple(map(int,code.split(".")))) in ("hunt","quest"))[hour%2::2]
     rng = random.Random(f"guszk-armourer-{hour}")
     stock = rng.sample(pool,4)
     if active=="convoy": stock.append(rng.choice([code for code in pool if code not in stock]))
@@ -49,7 +51,7 @@ def capacity(h):
     return BAGS[h["pack"]][0]
 
 def units(h,needed=None):
-    return sum(free(h,k,needed or {}) for k in h["junk"])
+    return sum(free(h,k,needed or {}) for k in h["junk"])+sum(h.get("supplies",{}).values())
 
 def material_name(key):
     z,n=map(int,key.split("."))
@@ -94,7 +96,7 @@ def market(h,uid,section="town",note="",active=None,needed=None):
     shops={"town":"Гусзк","armourer":"Лавка Мартина","apoth":"Аптека Лады","scribe":"Писец Тиш","bags":"Сумочник Уна","keys":"Ключница Рада"}
     text = [shops.get(section,"Скупщик Вей"), f"Кошелёк · {h['wallet']} мед."]
     if section in ("town","bags") or section.startswith("sell"):
-        text[1]+=f"  ·  Хлам {units(h,needed)}/{capacity(h)}"
+        text[1]+=f"  ·  Сумка {units(h,needed)}/{capacity(h)}"
     if active=="wall" and not section.startswith("sell"):
         text.append("Караул на стене · в ценах учтена скидка 5%.")
     if active=="convoy" and section=="armourer":
@@ -153,6 +155,10 @@ def market(h,uid,section="town",note="",active=None,needed=None):
                     number = len(entries) + 1
                     label = f"{number}. {item} · {4*trade_value(z,k)} мед."
                     entries.append((label, row(str(number), f"gear-{z}-{k}")[0]))
+        for key,count in h.get("supplies",{}).items():
+            number=len(entries)+1
+            label=f"{number}. [{workshops.purpose(h,key)}] {workshops.name(key)} ×{count} · по {workshops.sell_price(key)} мед."
+            entries.append((label,row(str(number),"supply-"+key)[0]))
         for key,count in h["junk"].items():
             z,n = map(int,key.split("."))
             name = "Связка выделанных шкур" if (z,n)==(6,98) else material_name(key)
@@ -204,6 +210,11 @@ def trade(h,uid,p,active=None,needed=None):
         if h["wallet"]<cost: return view("armourer","Не хватает медяков.")
         h["items"][item]=[gear_stat(z,k),strength(z,k)]
         delta,section=-cost,"armourer"
+    elif action.startswith("supply-"):
+        material=action[7:]
+        if not h.get("supplies",{}).get(material):return view("sell","Материала уже нет.")
+        workshops.add(h,material,-1)
+        delta,section=workshops.sell_price(material),"sell"
     elif action=="cash":
         delta,h["sale_tenths"] = junk_payment(h,active,needed)
         h["junk"]={k:min(v,needed[k]) for k,v in h["junk"].items() if needed.get(k,0)>0}

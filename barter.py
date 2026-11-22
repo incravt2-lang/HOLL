@@ -1,4 +1,5 @@
 """Chat-local gifts and trades. Settle both baskets together on acceptance."""
+import workshops
 import secrets
 import time
 from localchat import together,track
@@ -12,18 +13,20 @@ def button(label,cmd):
 
 def label(code):
     if code=="m": return "Медяки"
+    if code.startswith("w"): return workshops.name(code[1:])
     if code.startswith("j"): return material_name(code[1:])
     return CODE_ITEMS[code[1:]]
 
 def stock(h,other,reserve):
     result={"m":h["wallet"]}
     result.update({"e"+ITEM_CODES[it]:1 for it in h["items"] if it not in h["gear"] and it not in other["items"]})
+    result.update({"w"+k:v for k,v in h.get("supplies",{}).items()})
     result.update({"j"+k:free(h,k,reserve) for k in h["junk"]})
     return {k:v for k,v in result.items() if v>0}
 
 def basket(data):
     def entry(k,v):
-        tag=category(*map(int,k[1:].split("."))) if k.startswith("e") else "Монеты" if k=="m" else "Хлам"
+        tag=category(*map(int,k[1:].split("."))) if k.startswith("e") else "Монеты" if k=="m" else "Ремесло" if k.startswith("w") else "Хлам"
         return f"[{tag}] {label(k)} ×{v}"
     return ", ".join(entry(k,v) for k,v in data.items()) or "ничего"
 
@@ -40,10 +43,12 @@ def settle(s,o):
         if any(v<1 or available.get(k,0)<v for k,v in hands[i].items()):
             return "Состав сумок или кошельков изменился. Сделка закрыта."
         future=Counter(h["junk"])
+        supplies=sum(h.get("supplies",{}).values())
         for sign,hand in ((-1,hands[i]),(1,hands[1-i])):
             for k,v in hand.items():
+                if k.startswith("w"): supplies+=sign*v
                 if k.startswith("j"): future[k[1:]]+=sign*v
-        after=sum(max(0,v-reserves[i].get(k,0)) for k,v in future.items())
+        after=supplies+sum(max(0,v-reserves[i].get(k,0)) for k,v in future.items())
         if after>max(capacity(h),units(h,reserves[i])):
             return "У получателя не хватает места в сумке. Сделка закрыта."
     for i,hand in enumerate(hands):
@@ -52,6 +57,9 @@ def settle(s,o):
             if k=="m":
                 h["wallet"]-=v
                 other["wallet"]+=v
+            elif k.startswith("w"):
+                workshops.add(h,k[1:],-v)
+                workshops.add(other,k[1:],v)
             elif k.startswith("j"):
                 key=k[1:]
                 h["junk"][key]-=v

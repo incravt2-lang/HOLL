@@ -223,6 +223,8 @@ SCRAPS[6][98]="Связка выделанных шкур"
 def gear_names(z):
     return NAMES[z]
 
+RECIPE_SLOTS = {}
+
 def legacy_names(z):
     return ZONES[z][3]+(VAULTS[z][2] if z in VAULTS else ())+tuple(name for _,name in EXTRA[z])+tuple(ARMS[z])+tuple(name for _,name in OUTFITS[z])
 
@@ -291,6 +293,7 @@ def original_count(z):
 BASE_SLOTS = [[0, 1, 0, 1, 7, 1], [0, 1, 0, 1, 0, 1], [0, 9, 0, 1, 7, 1], [0, 1, 0, 1, 0, 9], [0, 1, 0, 1, 0, 1], [0, 1, 0, 9, 7, 9], [0, 1, 7, 1, 0, 9, 0, 1], [0, 9, 0, 1, 0, 1, 0, 1], [0, 1, 0, 1, 0, 9, 0, 1]]
 
 def gear_slot(z,k):
+    if (z,k) in RECIPE_SLOTS: return RECIPE_SLOTS[z,k]
     if (z,k) in CLASS_PIECES: return CLASS_PIECES[z,k][1]
     if k>=outfit_start(z): return OUTFITS[z][k-outfit_start(z)][0]
     if k>=arm_start(z):
@@ -399,7 +402,7 @@ def legacy_loot_slots(z,n):
 
 TIERS = ("Обычное","Редкое","Превосходное","Уникальное","Артефакт")
 # Weights out of 1000, conditional on equipment dropping.
-TIER_WEIGHTS = {"hunt":(750,180,55,13,2),"raid":(650,230,90,25,5),"vault":(500,300,140,50,10)}
+TIER_WEIGHTS = {"hunt":(820,180,0,0,0),"raid":(0,720,220,50,10),"vault":(0,660,250,75,15)}
 RARITY = {}
 for z in range(len(ZONES)):
     for n in ((0,5,8,11) if z in VAULTS else (0,5,8)):
@@ -409,7 +412,7 @@ for z in range(len(ZONES)):
 
 RARITY.update({code:piece[3] for code,piece in CLASS_PIECES.items()})
 
-def loot_slots(z,n,cls=None):
+def historical_loot_slots(z,n,cls=None):
     source=0 if n in HUNT_IDS else n//3
     extra=SOURCES.get((z,source),())
     boss_drop=(SEAM_INDEX,) if (z,n)==(6,5) and cls in (None,"guard") else ()
@@ -418,12 +421,91 @@ def loot_slots(z,n,cls=None):
 # Items unique to the upper hunting grounds, second dungeon or vault unlock halfway through a band.
 UPPER_GEAR = set()
 for zone in range(len(ZONES)):
-    early = set(loot_slots(zone,0)) | set(loot_slots(zone,5))
-    late = set(loot_slots(zone,8))
-    if zone in VAULTS: late.update(loot_slots(zone,11))
+    early = set(historical_loot_slots(zone,0)) | set(historical_loot_slots(zone,5))
+    late = set(historical_loot_slots(zone,8))
+    if zone in VAULTS: late.update(historical_loot_slots(zone,11))
     UPPER_GEAR.update((zone,k) for k in late-early)
 
+from workshop_data import patterns
+
+# Codes never move. Inactive models stay readable in inventories and pending loot.
+ORIGINAL_RARITY=RARITY.copy()
+ORIGIN = {}
+RECIPES = {}
+for z,names in enumerate(NAMES):
+    for k in range(outfit_start(z)+len(OUTFITS[z])):
+        if k < original_count(z):
+            source,tier=(("hunt",0),("quest",0),("quest",1),("dungeon",1),
+                         ("dungeon",2),("dungeon",3),("dungeon",2),("dungeon",4))[k]
+        elif arm_start(z)<=k<outfit_start(z):
+            continue
+        else:
+            source,tier=(("hunt",1),("quest",1),("dungeon",1))[(k-original_count(z))%3]
+        ORIGIN[z,k]=source
+        RARITY[z,k]=tier
+for (z,k),(_,slot,cls,tier,family,_) in CLASS_PIECES.items():
+    if slot in (LEFT,RIGHT) and tier in (0,1,4):
+        ORIGIN[z,k]=("hunt","quest","dungeon")[0 if tier==0 else 1 if tier==1 else 2]
+    elif cls=="guard" and tier==0 and slot<LEFT:
+        ORIGIN[z,k]="quest" if slot%2 else "hunt"
+    if slot==RIGHT and tier==2:
+        trade="sew" if cls=="archer" else "forge"
+        ORIGIN[z,k]="deep"
+        RECIPES[z,k]=(trade,True,20*BANDS[z]+15)
+for band in range(6):
+    # A poacher can find a bow before obtaining a workshop pattern.
+    bow=next(((z,k) for z,items in enumerate(NAMES) if BANDS[z]==band
+              for k,item in enumerate(items[:outfit_start(z)]) if ARM_BY_NAME.get(item)==("archer","Лук")),None)
+    if bow:
+        ORIGIN[bow]="hunt"
+        RARITY[bow]=1
+ORIGIN[6,SEAM_INDEX]="dungeon"
+for band,trade,item,slot,tier,deep,skill in patterns():
+    z=BANDS.index(band)
+    k=len(NAMES[z])
+    NAMES[z].append(item)
+    RECIPE_SLOTS[z,k]=slot
+    RECIPES[z,k]=(trade,deep,skill)
+    ORIGIN[z,k]="deep" if deep else "craft"
+    RARITY[z,k]=tier
+
+# Keep a complete wearable wardrobe per decade and a local reward of each
+# field/contract quality in every region. Prefer named regional pieces.
+wardrobe=set()
+for band in range(6):
+    options=[p for p,source in ORIGIN.items() if BANDS[p[0]]==band and
+             source in ("hunt","quest") and gear_slot(*p)<LEFT]
+    for slot in set(range(LEFT))-{8}:
+        eligible=sorted((p for p in options if gear_slot(*p)==slot),
+                        key=lambda p:(p in UPPER_GEAR,p in CLASS_PIECES,p))
+        wardrobe.update(eligible[:2 if slot==7 else 1])
+for z in range(len(ZONES)):
+    for source in ("hunt","quest"):
+        for tier in (0,1):
+            local=next((p for p,o in ORIGIN.items() if p[0]==z and o==source and
+                        gear_slot(*p)<LEFT and RARITY[p]==tier),None)
+            if local:wardrobe.add(local)
+for p,source in list(ORIGIN.items()):
+    slot=gear_slot(*p)
+    if source in ("hunt","quest") and ((slot<LEFT and p not in wardrobe) or (slot==LEFT and source=="quest")):
+        del ORIGIN[p]
+        RARITY[p]=ORIGINAL_RARITY[p]
+
+def suitable(z,k,cls):
+    arm=ARM_BY_NAME.get(NAMES[z][k])
+    return cls is None or not arm or arm[0]==cls
+
+from functools import lru_cache
+@lru_cache(None)
+def loot_slots(z,n,cls=None):
+    hunting=n in HUNT_IDS
+    return tuple(k for k in range(len(NAMES[z]))
+                 if ORIGIN.get((z,k))==("hunt" if hunting else "dungeon") and suitable(z,k,cls)
+                 and ((z,k)!=(6,SEAM_INDEX) or n==5)
+                 and (RARITY[z,k]<3 or n%3==2))
+
 def wear_level(z,k):
+    if (z,k) in RECIPES: return required_level(z)+(7 if RECIPES[z,k][1] else 3)
     return required_level(z) + (5 if (z,k) in UPPER_GEAR else 0)
 
 def tier_name(z,k):
@@ -431,12 +513,24 @@ def tier_name(z,k):
 
 def trade_value(z,k):
     tier=RARITY[z,k]
+    if (z,k) in RECIPES: return 5+2*BANDS[z]+tier
     return base_strength(z,k)*(4+tier)//4+tier
 
 # Primary bonuses are stored in displayed units (HP or attack).
 # Each ten-level band improves every slot; heavy pieces also improve at mid-band.
 SLOT_HP = (2, 5, 4, 2, 4, 2, 2, 2, 2, 3, 2, 2, 4, 3, 2)
+BUDGET={"hunt":(90,95),"quest":(100,105),"craft":(104,109,114),
+        "deep":(0,113,118,123),"dungeon":(0,116,121,126,130)}
 def strength(z,k):
+    source=ORIGIN.get((z,k))
+    if not source: return legacy_strength(z,k)
+    slot=gear_slot(z,k)
+    offset=wear_level(z,k)-1
+    base=4+offset//5 if slot==RIGHT else SLOT_HP[slot]+offset//(5 if slot in (1,LEFT) else 10)
+    power=max(1,(base*BUDGET[source][RARITY[z,k]]+50)//100)
+    return power*2 if slot==RIGHT and two_handed(NAMES[z][k]) else power
+
+def legacy_strength(z,k):
     slot = gear_slot(z,k)
     tier = RARITY[z,k]
     level_offset = wear_level(z,k)-1
