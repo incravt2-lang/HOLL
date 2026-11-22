@@ -668,6 +668,20 @@ def area(mode,z,h,half=0):
         rows = [[btn(f"{v[0]} · ур. {rank(z,3+3*j)}–{rank(z,5+3*j)}",f"new:raid:{z}:{j}")] for j,v in enumerate(raids) if j==half]
     return reply(f"{name} · выбери цель",rows)
 
+def gear_description(h,z,k,item):
+    power=effective_power(h,item)
+    unit="к удару" if h["items"][item][0]==0 else "ХП"
+    lines=[f"{item} — {item_slot_label(z,k)}", f"{tier_name(z,k)} · ур. {wear_level(z,k)}"]
+    if item in ARM_BY_NAME:
+        cls=ARM_BY_NAME[item][0]
+        lines[1]+=" · "+CLASSES[cls][0]+(" · ½ силы" if cls!=h["class"] else "")
+    bonuses=[f"+{power} {unit}"]
+    if item in ITEM_TRAITS:
+        idx,value=ITEM_TRAITS[item]
+        bonuses.append(f"{STAT_NAMES[idx]} +{value}")
+    bonuses.append(bonus_label(h,item))
+    return "\n".join(lines+[" · ".join(bonuses)])
+
 def inventory(h,uid,slot=None,page=0,needed=None,active=None):
     needed=needed or {}
     if slot is None:
@@ -676,18 +690,15 @@ def inventory(h,uid,slot=None,page=0,needed=None,active=None):
         for j in SLOT_ORDER:
             buttons.append(btn(SLOTS[j],f"slot:{uid}:{j}"))
         rows = [buttons[j:j+2] for j in range(0,len(buttons),2)]
-        items=list(reversed(h["items"]))
-        page_size=6
+        worn=set(h["gear"])
+        items=[item for item in reversed(h["items"]) if item not in worn]
+        page_size=3
         pages=max(1,(len(items)+page_size-1)//page_size)
         page=min(page,pages-1)
         overview=[]
         for item in items[page*page_size:(page+1)*page_size]:
             z,k=map(int,ITEM_CODES[item].split("."))
-            if item in h["gear"]:
-                where=SLOTS[h["gear"].index(item)]+" · надето"
-            else:
-                where=item_slot_label(z,k)
-            overview.append(f"{item} — {where}")
+            overview.append(gear_description(h,z,k,item))
         if pages>1:
             rows.insert(0,[btn(label,f"bag:{target}") for label,target in
                            (("‹ Новее",page-1),("Старее ›",page+1)) if 0<=target<pages])
@@ -695,9 +706,9 @@ def inventory(h,uid,slot=None,page=0,needed=None,active=None):
         rows.append([btn("Хлам и материалы","materials")])
         stock = [f"{v[0]} ×{h['potions'][k]}" for k,v in POTIONS.items() if h["potions"].get(k)]
         rows.append([btn("Скупщик","shop:"+uid+":"+revision(h,active)+":sell")])
-        heading=f"Снаряжение · {len(items)}"
+        heading=f"Запасное снаряжение · {len(items)}"
         if pages>1: heading+=f" · стр. {page+1}/{pages}"
-        return reply(heading+"\n"+("\n".join(overview) if overview else "Пока нет вещей.")+
+        return reply(heading+"\n\n"+("\n\n".join(overview) if overview else "Запасных вещей пока нет.")+
                      f"\n\nХлам {units(h,needed)}/{capacity(h)} · {h['wallet']} мед.\nРасходники: "+(", ".join(stock) or "пусто"),rows)
     worn = h["gear"][slot]
     label_worn = worn
@@ -712,19 +723,7 @@ def inventory(h,uid,slot=None,page=0,needed=None,active=None):
                 if idx==0: idx = min((0,1,2),key=lambda n:abs(rank(z,n)-level(h)))
                 sources.append((abs(rank(z,idx)-level(h)),z,idx,item))
                 continue
-            stat = h["items"][item][0]
-            power = effective_power(h,item)
-            label = f"{item} · +{power} удар" if stat==0 else f"{item} · +{power} ХП"
-            label += f" · ур. {wear_level(z,k)}"
-            if item in ITEM_TRAITS:
-                idx,value=ITEM_TRAITS[item]
-                label += f" · {STAT_NAMES[idx]} +{value}"
-            if item in ARM_BY_NAME:
-                cls = ARM_BY_NAME[item][0]
-                label += " · "+CLASSES[cls][0]+(" · ½" if cls!=h["class"] else "")
-                if two_handed(item): label += " · 2 руки"
-            label = tier_name(z,k)+" · "+label
-            label += " · "+bonus_label(h,item)
+            label=gear_description(h,z,k,item)
             if item!=worn:
                 if item in h["gear"]: label += " · "+SLOTS[h["gear"].index(item)]
                 rows.append([btn(label,f"dress:{uid}:{slot}:{z}:{k}")])

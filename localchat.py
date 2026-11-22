@@ -14,12 +14,23 @@ from urllib.parse import parse_qsl, urlsplit
 
 from world import encounter_area, area_name, ZONES, VAULTS
 
+CHAT_TTL = 24*60*60
+
+def prune(db):
+    db.execute("DELETE FROM location_messages WHERE created<=?",(time.time()-CHAT_TTL,))
+
 def init(db):
+    db.execute("CREATE TABLE IF NOT EXISTS admin_mutes(uid TEXT PRIMARY KEY, until INTEGER NOT NULL, rev INTEGER NOT NULL)")
+    db.execute("CREATE TABLE IF NOT EXISTS admin_audit(id INTEGER PRIMARY KEY, ts INTEGER, actor TEXT, uid TEXT, muted INTEGER)")
     db.execute("CREATE TABLE IF NOT EXISTS chat_seen(uid TEXT PRIMARY KEY, stamp REAL)")
     db.execute("""CREATE TABLE IF NOT EXISTS location_messages(
         id INTEGER PRIMARY KEY, room TEXT NOT NULL, uid TEXT NOT NULL,
         nick TEXT NOT NULL, body TEXT NOT NULL, created REAL NOT NULL, nonce TEXT NOT NULL,
         UNIQUE(uid,nonce))""")
+    if "label" not in {col[1] for col in db.execute("PRAGMA table_info(location_messages)")}:
+        db.execute("ALTER TABLE location_messages ADD COLUMN label TEXT")
+    db.execute("CREATE INDEX IF NOT EXISTS messages_by_time ON location_messages(created)")
+    prune(db)
     db.execute("CREATE INDEX IF NOT EXISTS messages_by_room ON location_messages(room,id)")
 
 def track(state):
@@ -105,6 +116,8 @@ def exchange(db,uid,req,write):
     since=h.get("talk_since",0)
     visit=f"{room}|{since}"
     if write:
+        if db.execute("SELECT 1 FROM admin_mutes WHERE uid=? AND until>?",(uid,now)).fetchone():
+            raise ChatError(403,"Модератор временно ограничил отправку сообщений.")
         if not room or req.get("visit")!=visit:raise ChatError(409,"Герой сменил место. Открой текущий разговор.")
         body=req.get("body");nonce=req.get("nonce")
         if not isinstance(body,str) or not 0<len(body.strip())<=500 or not isinstance(nonce,str) or not re.fullmatch('[a-zA-Z0-9-]{12,64}',nonce):
@@ -115,10 +128,10 @@ def exchange(db,uid,req,write):
         if not sent:
             last=db.execute("SELECT created FROM location_messages WHERE uid=? ORDER BY id DESC LIMIT 1",(uid,)).fetchone()
             if last and now-last[0]<2:raise ChatError(429,"Подожди пару секунд перед следующей репликой.")
-            db.execute("INSERT INTO location_messages(room,uid,nick,body,created,nonce) VALUES(?,?,?,?,?,?)",
-                       (room,uid,name[0],body.strip(),now,nonce))
+            db.execute("INSERT INTO location_messages(room,uid,nick,body,created,nonce,label) VALUES(?,?,?,?,?,?,?)",
+                       (room,uid,name[0],body.strip(),now,nonce,label))
     rows=db.execute("""SELECT id,nick,body,created,uid=? FROM location_messages
-        WHERE room=? AND created>=? ORDER BY id DESC LIMIT 50""",(uid,room,since)).fetchall() if room else []
+        WHERE room=? AND created>=? ORDER BY id DESC LIMIT 50""",(uid,room,max(since,now-CHAT_TTL))).fetchall() if room else []
     return dict(title=label,visit=visit,enabled=bool(room),messages=list(reversed(rows)))
 
 def serve(database,token):

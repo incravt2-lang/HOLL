@@ -1,4 +1,5 @@
 """Telegram transport. Run one polling process per token."""
+import admin_panel
 import hashlib
 import alpha
 import localchat
@@ -444,12 +445,16 @@ def process(db, update, username):
     with db:
         db.execute("BEGIN IMMEDIATE")
         existing = db.execute("SELECT result FROM pending WHERE id=?", (key,)).fetchone()
-        if existing: return json.loads(existing[0])
         cb = update.get("callback_query", {})
         m = cb.get("message") or update.get("message", {})
         chat = m.get("chat", {})
         actor = cb.get("from") or m.get("from", {})
         if not chat: return
+        if existing:
+            saved=json.loads(existing[0])
+            if not saved.get("private_admin") or (chat.get("type")=="private" and
+                    actor.get("id")==chat["id"] and admin_panel.allowed(chat["id"])):
+                return saved
         if not cb and m.get("sender_chat") and chat.get("type") in ("group","supergroup"):
             command = (m.get("text") or "").strip().lower()
             if command in ("/start","/start@"+username.lower()):
@@ -458,6 +463,24 @@ def process(db, update, username):
                             thread=m.get("message_thread_id") if m.get("is_topic_message") else None)
             return
         if not actor or actor.get("is_bot"): return
+        if chat["type"]=="private":
+            uid=str(actor["id"])
+            text="Игра проходит в группах. Открой игровую группу и отправь /start@"+username+"."
+            rows=[]
+            words=(m.get("text") or "").strip().split(maxsplit=1)
+            command=(words[0] if words else "").split("@")[0].lower()
+            if not cb and command=="/id":
+                text=f"Твой Telegram ID · {uid}"
+            elif str(chat["id"])==uid and admin_panel.allowed(uid):
+                data=cb.get("data","")
+                action=data[4:] if cb and data.startswith("adm:") else "home"
+                if not cb and command=="/find":
+                    action="find:"+(words[1] if len(words)>1 else "")
+                text,rows=admin_panel.render(db,uid,action)
+            result=dict(chat=chat["id"],message=m["message_id"],cb=cb.get("id"),notice=False,text=text,rows=rows,thread=None)
+            result["private_admin"]=str(chat["id"])==uid and admin_panel.allowed(uid)
+            db.execute("INSERT OR REPLACE INTO pending VALUES (?,?)",(key,json.dumps(result)))
+            return result
         if cb:
             cmd = cb.get("data", "")
         else:
@@ -472,10 +495,7 @@ def process(db, update, username):
             else:return
         if cb and cmd.startswith("nav:"):
             cmd = cmd[4:]
-        if chat["type"]=="private":
-            result = dict(chat=chat["id"],message=m["message_id"],cb=cb.get("id"),notice=False,
-                          text="Открой группу и отправь /start@"+username+".",rows=[],thread=None)
-        elif chat["type"] in ("group","supergroup"):
+        if chat["type"] in ("group","supergroup"):
             uid = str(actor["id"])
             if cb:
                 owner = db.execute("SELECT slot FROM cards WHERE chat=? AND message=?",
@@ -483,7 +503,10 @@ def process(db, update, username):
                 if not owner or owner[0]!="player:"+uid:
                     return dict(chat=chat["id"],cb=cb["id"],notice=True,
                                 text="Открой свою карточку. Если её ещё нет, отправь /start@"+username+".")
+            if cmd.startswith("adm:"): return dict(chat=chat["id"],cb=cb.get("id"),notice=True,text="Кнопка недоступна.")
             state=alpha.load(db)
+            if uid in state["heroes"]:
+                db.execute("INSERT OR REPLACE INTO chat_seen VALUES(?,?)",(uid,time.time()))
             before_offers=recipients(state)
             if cb and cmd.startswith("page:") and db.execute("SELECT 1 FROM alpha_names WHERE uid=?",(uid,)).fetchone():
                 rec = db.execute("SELECT view FROM card_media WHERE chat=? AND message=?",(chat["id"],m["message_id"])).fetchone()
@@ -702,10 +725,14 @@ def main():
         alpha.save(db,alpha.load(db))
     localchat.serve(database,TOKEN)
     print(f"Мёртвая мера · {alpha.RELEASE} · общий мир",flush=True)
+    next_prune = 0
     next_profile = 0
     username = None
     while True:
         try:
+            if time.monotonic()>=next_prune:
+                with db:localchat.prune(db)
+                next_prune=time.monotonic()+60
             if username is None:
                 identity = api("getMe")
                 username = identity["username"]
