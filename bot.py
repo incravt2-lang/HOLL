@@ -21,9 +21,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from world import HUNT_IDS
+from world import HUNT_IDS, ZONES, area_name
 from market import POTIONS, SCROLLS
-from game import CLASSES, TITLE, btn, play, board, level, migrate, title, target
+from game import return_route, CLASSES, TITLE, btn, play, board, level, migrate, title, target
 
 COMMANDS = {"town":"Город и торговцы","vault":"Редкие одиночные подземелья","zones":"Карта уровней","book":"Бестиарий и добыча","hunt":"Одиночная или совместная охота","start":"Меню свободной игры","hero":"Лист героя и выбор класса",
             "raid":"Сбор отряда и бой","bag":"Снаряжение","help":"Правила игры"}
@@ -167,6 +167,13 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
             label="К кострам лагеря" if trip["step"]==3 and not trip.get("returning") and not trip.get("waiting") else "Продолжить путь"
             rows.insert(0,[btn(label,"road")])
 
+        elif hero and not mine and hero.get("hunting_ground"):
+            location=hero["hunting_ground"]
+            for zone in range(len(ZONES)):
+                for half in (0,1):
+                    if area_name(zone,half)==location:
+                        rows.insert(0,[btn("Вернуться · "+location,f"travel:{zone}:{half}")])
+
         if hero and hero.get("last_result"): rows.append([btn("Итоги последнего боя","nav:report")])
         if mine: rows.insert(0,[btn("Вернуться в поход","nav:current")])
     elif cmd=="hero" and hero:
@@ -204,7 +211,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         return dict(chat=chat,cb=cb,notice=True,text=msg)
     mine = next((r for r in fights.values() if uid in r["party"]),None)
     if op=="leave" and uid in before and not mine:
-        msg,rows = "Ты вышел из сбора.",[]
+        msg,rows = "Ты вышел из сбора.",return_route(previous)
     viewing = mine and any(b["callback_data"].split(":")[0] in ACTIONS and mine["id"] in
                            b["callback_data"].split(":")[1:2] for row in rows for b in row)
     if viewing:
@@ -291,7 +298,7 @@ def screen_picture(command, hero):
         return "hero_" + hero["class"] if hero else "teams"
     if op == "report":
         return hero.get("report_art","teams") if hero else "teams"
-    if op=="travel" and len(args)==2:return ("upper_" if args[1]=="1" else "zone_")+args[0]
+    if op in ("travel","journey") and len(args)==2:return ("upper_" if args[1]=="1" else "zone_")+args[0]
     if op == "area" and len(args) in (2,3):
         mode, zone = args[:2]
         if mode!="vault" and args[2:]==["1"]: return "upper_"+zone
@@ -383,7 +390,7 @@ def shared_action(db,state,chat,uid,topic,cmd,cb,m,actor):
     name=registered[0] if registered else actor.get("first_name","Путник")[:32]
     trip=(hero or {}).get("coast_trip",{})
     if not mine and (trip.get("returning") or trip.get("step")==3 and not trip.get("waiting")):
-        if cmd.split(":")[0] in {"town","orders","shop","travel","new","join"}:
+        if cmd.split(":")[0] in {"town","orders","shop","travel","journey","new","separate","join"}:
             cmd="road" if trip.get("returning") else f"road:{trip['id']}:return"
     if hero and not mine and (cmd in ("town","orders") or cmd.startswith(("orders:", "shop:"))):
         hero.pop("hunting_ground",None)
@@ -535,12 +542,12 @@ def process(db, update, username):
                 room=h.get("talk_room")
                 if room and db.execute("SELECT 1 FROM alpha_names WHERE uid=?",(who,)).fetchone():
                     label="Чат отряда" if room.startswith("party/") else "Чат локации"
-                    if cmd.split(":")[0] in ACTIONS|{"town","road","current","travel","new"}:
+                    if cmd.split(":")[0] in ACTIONS|{"town","road","current","travel","journey","new"}:
                         card["text"]+="\n\nМесто · "+h["talk_label"]
                     art=card.get("art","")
                     party_view=room.startswith(("party/","vault/")) and (art.startswith(("room_","raid_","vault_","fork_")))
                     public_view=(art=="town" or art=="coast_road" or party_view or
-                                 (room.startswith("hunt/") and (cmd.startswith("travel:") or art.startswith("beast_"))))
+                                 (room.startswith("hunt/") and (cmd.startswith(("travel:","journey:")) or art.startswith("beast_"))))
                     if not public_view: continue
                     menus=[row for row in card["rows"] if any(b.get("callback_data")=="nav:start" for b in row)]
                     card["rows"]=[row for row in card["rows"] if row not in menus]
@@ -562,7 +569,7 @@ def combat_entities(text):
         ("bold", r"^([0-9]+ мед\.)  ·"),
         ("bold", r"^.+ · раунд [0-9]+$"),
         ("bold", r"^.+ · ур\. [0-9]+ · ([0-9]+ ХП)$"),
-        ("italic", r"^(?:Разбег|Предсмертный рывок|Твёрдый нарост|Засада|Караульная стойка|Судорога Плети|Счёт недостачи) · (.+)$"),
+        ("italic", r"^(?:Разбег|Предсмертный рывок|Твёрдый нарост|Засада|Караульная стойка|Судорога Мора|Счёт недостачи) · (.+)$"),
         ("bold", r"^(?:Отряд: [0-9]+/[0-9]+ ХП.*|Отряд нанёс .+|Итоги раунда [0-9]+:|Действия сейчас · [0-9]+/[0-9]+ готовы)$"),
     )
     result = []

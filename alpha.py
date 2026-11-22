@@ -11,7 +11,7 @@ import haul
 import localchat
 from quests import SHIFT
 
-RELEASE = "Alpha 0.1.6"
+RELEASE = "Alpha 0.2.0"
 NAME = re.compile(r"[A-Z][a-z]{2,17}")
 RULE = "Имя героя · 3–18 английских букв. Первая заглавная, остальные строчные. Например, Aldric."
 
@@ -58,7 +58,7 @@ def load(db):
         for uid,h in old["heroes"].items():
             h.pop("trade_draft",None)
             board=old.get("contracts",{})
-            if board.get("shift")==int(time.time())//SHIFT and any(q.get("owner")==uid for q in board["jobs"]):
+            if any(q.get("owner")==uid for q in board.get("jobs",[])):
                 # Honour already signed pages until the old shift expires.
                 personal=deepcopy(board)
                 for q in personal["jobs"]:

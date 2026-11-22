@@ -20,7 +20,7 @@ CLASSES = {
 HISTORIES = {
  "guard":"Старая гвардия держала ворота Гусзка, когда из-за стены звали по именам. Из того караула выжили немногие. Жалованье кончилось, совет распущен, и принимать присягу теперь некому. Но стоит гвардейцу откинуть плащ и показать потёртый нагрудный знак, как на ратушной лестнице ему уступают место у огня.",
  "nun":"Когда городские лекари запирали двери перед чужими, сёстры Ордена Матери ставили палатки по обе стороны рва. Под их белым полотнищем раненому давали воду до того, как спрашивали имя. Орден держится этого правила до сих пор. В полевой сумке сестры лежат две одинаковые перевязи: для того, кто нанёс удар, и для того, кто его принял.",
- "archer":"До Плети за силок на городском угодье в Ровне клеймили ладонь. Те немногие браконьеры, что пережили мор, жили вдали от рынка и читали следы лучше писем. Когда лисицы перестали брать выброшенную рыбу, охотники тоже оставили её лежать. Теперь судейский двор пуст, и браконьер впервые входит в Гусзк днём, с луком на виду.",
+ "archer":"До Мора за силок на городском угодье в Ровне клеймили ладонь. Те немногие браконьеры, что пережили мор, жили вдали от рынка и читали следы лучше писем. Когда лисицы перестали брать выброшенную рыбу, охотники тоже оставили её лежать. Теперь судейский двор пуст, и браконьер впервые входит в Гусзк днём, с луком на виду.",
  "smith":"Когда в осаждённом голодом Гусзке лопнула ось мельницы, мастера Гильдии инженеров подняли жернов воротом из трёх тележных колёс. Позже они укрепляли плотину камнем из разобранного суда. Мастер и в поход берёт мерный клин: по звуку металла он находит слабую заклёпку и сам бьёт в раскрывшийся шов и показывает его товарищам.",
  "witch":"В Аптекарском квартале Гусзка ученица должна была приготовить противоядие перед тремя мастерами. До её испытания дожил только один. Город так и не выдал ей свидетельство, зато у её двери выстраиваются носильщики из лазарета. Она знает, какой корень снимает судорогу, а каким достаточно натереть лезвие, чтобы пальцы врага ослабли.",
 }
@@ -88,9 +88,10 @@ from world import LIMITS, level, required_level
 from world import area_name, encounter_area, encounter_trait, faction, HUNT_IDS, EXTRA_HUNT_IDS, ZONES, TRAITS, BANDS, VAULTS, SCRAPS, gear_names, monster, rank, strength
 from world import LEFT, RIGHT, two_handed, ARM_BY_NAME, ARMS, arm_start
 from world import item_slot_label, SLOTS, SLOT_ORDER, RINGS, gear_slot, gear_stat, original_count
+from progression import victory_xp
 from quests import desk, record_win
 from notes import collection, find_note
-from coast import craft, journal, road
+from coast import ROAD_ENCOUNTER_CHANCE, craft, journal, road
 from trophies import spoils
 from cargo import needs
 from world import category
@@ -314,7 +315,7 @@ def board(s,r,viewer=None):
             return reply(f"{title(r)} · одиночный тайник · ур. {rank(r['z'],11)}\nТри зала. Зелья продаются у городского аптекаря. Вход расходует один ключ.\n{risk}",
                          [[btn("Войти за ключ",f"go:{key}"),btn("Отменить",f"leave:{key}")]])
         return reply(f"{title(r)} · сбор {len(r['party'])}/6\n{names}\n{risk}",
-                     [[btn("Войти",f"join:{key}"),btn("Выйти",f"leave:{key}")],[btn("Начать бой",f"go:{key}")]])
+                     ([[btn("Начать бой",f"go:{key}")],[btn("Выйти из сбора",f"leave:{key}")]] if viewer in r["party"] else [[btn("Вступить в отряд",f"join:{key}")]]))
     z,n = r["z"],target(r)
     suffix = f"{key}:{r['round']}"
     stage = "" if r["mode"]=="hunt" else f" · зал {r['room']+1}/3"
@@ -549,17 +550,18 @@ def resolve(s,r,viewer=None):
             haul.bank(s,r)
             reward=forks.pay(s,r)
             lines = [f"Победа · {title(r)}",msg] + ([reward] if reward else []) + scraps
+            completed_at = time.time()
             for h in party:
                 if (r["mode"],z,r["choice"])==("raid",6,0):
                     h["buckles"]=h.get("buckles",0)+1
                     lines.append(f"{h['name']}: [Трофеи] пряжка Кожевен · всего {h['buckles']}. Пять принимает мастер у моря.")
                 lv = level(h)
-                base = (16+min(enemy_lv,lv+4)*2)*{"hunt":1,"raid":6,"vault":1}[r["mode"]]
-                xp = min(LIMITS[-1]-h["xp"],city.earned(max(1,(27 if r["mode"]=="raid" else 12)*base//(10*(1+max(0,lv-enemy_lv-4)))),city.buff(s),h))
+                base_xp, source = victory_xp(h,r,enemy_lv,completed_at)
+                xp = min(LIMITS[-1]-h["xp"],city.earned(base_xp,city.buff(s),h))
                 h["xp"] += xp
                 h["peak"] = max(level(h),h.get("peak",1))
                 up = f" · уровень {level(h)}!" if level(h)>lv else ""
-                lines.append(f"{h['name']}: +{xp} опыта{up}")
+                lines.append(f"{h['name']}: +{xp} опыта{up}" + (f" · {source}" if source else ""))
             return reply("\n".join(lines),return_route(r))
         if r.get("route")=="loft" and r["room"]==1:
             r["cut_chain"]=True
@@ -686,7 +688,7 @@ def area(mode,z,h,half=0):
                      [[btn("Подготовиться ко входу",f"new:vault:{z}:0")]])
     if mode=="zones":
         return reply(f"{name} · уровни {low}–{low+4}\n{ZONE_NOTES[name]}\nОхота: {', '.join(monster(z,n) for n in hunts)}\nПодземелье: {raids[half][0]}",
-                     [[btn("Охота",f"area:hunt:{z}:{half}"),btn("Подземелья",f"area:raid:{z}:{half}")]]+([[btn(VAULTS[z][0],f"area:vault:{z}:1")]] if z in VAULTS and half else []))
+                     [])
     if mode=="hunt":
         rows = [[btn(f"{monster(z,j)} · ур. {rank(z,j)}",f"new:hunt:{z}:{j}")] for j in sorted(hunts,key=lambda n:rank(z,n))]
     else:
@@ -889,19 +891,29 @@ def play(s,uid,name,cmd):
         return atlas(op,h)
     if op=="band" and len(p)==3 and p[1] in MODES and p[2] in tuple(map(str,range(6))):
         return atlas(p[1],h,int(p[2]))
-    if op=="travel" and len(p)==3 and p[1] in DIGITS and p[2] in ("0","1"):
+    if op in ("travel","journey") and len(p)==3 and p[1] in DIGITS and p[2] in ("0","1"):
         if mine:return board(s,mine,uid)
         z,half=int(p[1]),int(p[2])
+        location=area_name(z,half)
+        moved=h.get("hunting_ground")!=location or bool(h.get("coast_trip"))
         h.pop("coast_trip",None)
-        h["hunting_ground"]=area_name(z,half)
-        text,rows=area("hunt",z,h,half)
+        h["hunting_ground"]=location
+        if op=="journey" and moved and random.random()<ROAD_ENCOUNTER_CHANCE:
+            candidates=[n for n in HUNT_IDS if encounter_area(z,n)==location]
+            enemy=random.choice(candidates)
+            key=secrets.token_hex(5)
+            fights[key]=dict(id=key,mode="hunt",z=z,choice=enemy,room=0,round=0,party=[uid])
+            text,rows=play(s,uid,name,"go:"+key)
+            return reply(f"Случайная встреча · {location}\nПуть преграждает {monster(z,enemy)}.\n\n"+text,rows)
+        text,_=area("zones",z,h,half)
+        rows=[[btn("Охота",f"area:hunt:{z}:{half}"),btn("Подземелья",f"area:raid:{z}:{half}")]]+([[btn(VAULTS[z][0],f"area:vault:{z}:1")]] if z in VAULTS and half else [])
         return reply("Ты на месте. "+text,rows+[[btn("Вернуться в Гусзк","nav:town")]])
     if op=="area" and (len(p)==3 or len(p)==4 and p[3] in ("0","1")) and p[1] in MODES and p[2] in DIGITS:
         z=int(p[2])
         text,rows=area(p[1],z,h,int(p[3]) if len(p)==4 else int(p[1]=="vault"))
-        if p[1] in ("zones","hunt") and not mine:
+        if p[1]=="zones" and not mine:
             half=int(p[3]) if len(p)==4 else 0
-            rows.insert(0,[btn("Отправиться сюда",f"travel:{z}:{half}")])
+            rows.insert(0,[btn("Отправиться сюда",f"journey:{z}:{half}")])
         return text,rows+[[btn("‹ К локациям",f"band:{p[1]}:{BANDS[z]}")]]
     if op in ("entry","loot") and len(p)==3 and p[1] in DIGITS and p[2] in tuple(map(str,range(16))):
         z,n = map(int,p[1:])
@@ -914,11 +926,18 @@ def play(s,uid,name,cmd):
         return reply(f"{monster(z,n)} · ур. {rank(z,n)}\n{encounter_area(z,n)} · {origin}\n\n{encounter_trait(z,n)[0]}: {encounter_trait(z,n)[1]}\n"
                      f"Победы: {h.get('book',{}).get(f'{z}.{n}',0)}\n" +
                      f"\nДобыча\nХлам: {SCRAPS[z][n]} · {scrap_value(z,n)} мед.\nРедкость: {CURIOS[z]} · 6%\n" + (f"Монеты: 1–3 мед. · {COIN_CHANCE:.0%}\n" if is_humanoid(z,n) else "") + ("За охоту" if mode=="hunt" else f"Зал {n%3+1}") + f" · шанс снаряжения {equipment_chance(mode,n):.0%}",[[btn("Список снаряжения",f"loot:{z}:{n}")],[btn("Назад",f"area:book:{z}:{int((rank(z,n)-1)%10>=5)}")]])
-    if op=="new" and len(p)==4 and p[1] in ("hunt","raid","vault") and p[2] in DIGITS:
+    if op in ("new","separate") and len(p)==4 and p[1] in ("hunt","raid","vault") and p[2] in DIGITS:
         if mine: return board(s,mine,uid)
         mode = p[1]
         if p[3] not in tuple(map(str,HUNT_IDS if mode=="hunt" else (0,1))): return reply("Выбери цель заново.")
         if mode=="vault" and (int(p[2]) not in VAULTS or p[3]!="0"): return reply("Выбери тайник в разделе «Тайники».")
+        if op=="new" and mode!="vault":
+            available=[r for r in fights.values() if r["mode"]==mode and r["z"]==int(p[2])
+                       and r["choice"]==int(p[3]) and not r["round"] and 0<len(r["party"])<6]
+            if available:
+                rows=[[btn(f"Вступить · {heroes[r['party'][0]]['name']} · {len(r['party'])}/6","join:"+r["id"])] for r in available[:6]]
+                rows.append([btn("Создать свой сбор",f"separate:{mode}:{p[2]}:{p[3]}")])
+                return reply(title(available[0])+" · идёт сбор. Выбери отряд.",rows)
         key = secrets.token_hex(5)
         r = dict(id=key,mode=mode,z=int(p[2]),choice=int(p[3]),room=0,round=0,party=[uid])
         h.pop("coast_trip",None)
@@ -932,6 +951,8 @@ def play(s,uid,name,cmd):
             if len(r["party"])>=6: return reply("В отряде уже шесть героев.")
             h.pop("coast_trip",None)
             r["party"].append(uid)
+        elif op=="join" and mine is r:
+            return reply("Ты уже в отряде. Для начала нажми «Начать бой».",board(s,r,uid)[1])
         elif op=="join" and mine is not r: return reply("Ты уже в другом отряде.")
         if op=="leave" and uid in r["party"]:
             r["party"].remove(uid)

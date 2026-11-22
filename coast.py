@@ -10,6 +10,8 @@ from quests import copper, SHIFT, details, progress
 from world import gear_slot, wear_level, ORIGIN, suitable, RARITY, gear_names
 from world import item_slot_label, category, SEAM_SHIELD, encounter_area, BANDS, CLASS_PIECES, HUNT_IDS, SCRAPS, SLOTS, ZONES, faction, gear_stat, level, monster, rank, strength, tier_name
 
+ROAD_ENCOUNTER_CHANCE = 0.12
+
 MASTERS={"veya":"Шорница Вея","hariton":"Оружейник Харитон"}
 SLOTS_BY_MASTER={"veya":(0,3,5,7,9,10,11,13),"hariton":(1,2,4,6,12,14,15)}
 ROAD=(
@@ -67,10 +69,10 @@ def journal(s,uid):
     lines=["Поручения коменданта"]
     active=city.buff(s)
     b=s["heroes"][uid].get("orders_board",{})
-    if b.get("shift")==int(time.time())//SHIFT:
+    if b:
         for q in b["jobs"]:
             if q["owner"]==uid and not q["done"]:
-                label,xp,rare=details(q)
+                label,xp,rare=details(q,h)
                 xp=city.earned(xp,active,h)
                 if len(lines)>1: lines.append("")
                 source=source_line(q["z"],q["n"])
@@ -94,10 +96,10 @@ def road(h,args):
         return "Этот переход уже завершён.",[]
     if trip and args==[trip["id"],"return"] and trip["step"]==3 and not trip.get("waiting") and not trip.get("returning"):
         trip=h["coast_trip"]=dict(id=secrets.token_hex(3),step=0,returning=True,
-                ambush=random.randrange(1,4) if random.random()<0.12 else 0)
+                ambush=random.randrange(1,4) if random.random()<ROAD_ENCOUNTER_CHANCE else 0)
     if not trip:
         trip=h["coast_trip"]=dict(id=secrets.token_hex(3),step=0,
-                ambush=random.randrange(1,4) if random.random()<0.12 else 0)
+                ambush=random.randrange(1,4) if random.random()<ROAD_ENCOUNTER_CHANCE else 0)
     if len(args)==2 and args==[trip["id"],str(trip["step"])] and trip["step"]<3 and not trip.get("waiting"):
         trip["step"]+=1
         if trip["step"]==trip["ambush"]: trip["waiting"]=True
