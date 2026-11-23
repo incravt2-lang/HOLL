@@ -107,7 +107,6 @@ def market(h,uid,section="town",note="",active=None,needed=None):
     if note: text.append(note)
     rows = []
     if section=="town":
-        rows.append([{"text":"Войти в таверну","callback_data":"inn"}])
         rows.append([{"text":"Дорога к морю","callback_data":"road"}])
         rows.append([{"text":"Комендант · доска поручений","callback_data":"orders"}])
         for label,key in (("Мартин · оружейник","armourer"),("Лада · аптекарь","apoth"),("Тиш · писец","scribe"),("Вей · скупщик","sell"),("Уна · сумочник","bags"),("Рада · ключница","keys")):

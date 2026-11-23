@@ -94,7 +94,6 @@ from world import area_name, encounter_area, encounter_trait, faction, HUNT_IDS,
 from world import LEFT, RIGHT, two_handed, ARM_BY_NAME, ARMS, arm_start
 from world import item_slot_label, SLOTS, SLOT_ORDER, RINGS, gear_slot, gear_stat, original_count
 import special_orders
-import tavern
 from progression import victory_xp
 from quests import desk, record_win
 from notes import collection, find_note
@@ -342,9 +341,9 @@ def board(s,r,viewer=None):
         if r["mode"]=="vault":
             admitted=special_orders.permit(s["heroes"][r["party"][0]],r["z"])
             entry="Вход по допуску коменданта." if admitted else "Вход расходует один ключ."
-            return reply(f"{title(r)} · одиночный тайник · ур. {rank(r['z'],11)}\nТри зала. Вход · 3 Бодрости. {entry}\n{risk}",
+            return reply(f"{title(r)} · одиночный тайник · ур. {rank(r['z'],11)}\nТри зала. Зелья продаются у городского аптекаря. {entry}\n{risk}",
                          [[btn("Войти по допуску" if admitted else "Войти за ключ",f"go:{key}"),btn("Отменить",f"leave:{key}")]])
-        return reply(f"{title(r)} · сбор {len(r['party'])}/6\n{names}\nСтарт · {tavern.COST[r['mode']]} Бодрости с героя.\n{risk}",
+        return reply(f"{title(r)} · сбор {len(r['party'])}/6\n{names}\n{risk}",
                      ([[btn("Начать бой",f"go:{key}")],[btn("Выйти из сбора",f"leave:{key}")]] if viewer in r["party"] else [[btn("Вступить в отряд",f"join:{key}")]]))
     z,n = r["z"],target(r)
     suffix = f"{key}:{r['round']}"
@@ -936,7 +935,7 @@ def play(s,uid,name,cmd):
         lv = level(h)
         xp = "Достигнут предел уровней." if lv==60 else f"До уровня {lv+1}: {LIMITS[lv]-h['xp']} опыта."
         diary="\n\n"+journal(s,uid) if op=="diary" else ""
-        return reply(f"{CLASSES[h['class']][0]} · ур. {lv}/60\n{xp}\nБодрость · {tavern.balance(h)}/100\n\nВ бою\n"
+        return reply(f"{CLASSES[h['class']][0]} · ур. {lv}/60\n{xp}\n\nВ бою\n"
                      f"Удар: {bounds(attack(h))[0]}–{bounds(attack(h))[1]} · крит: {crit(h)}% ×{multiplier(h)/100:.2f}\nЗдоровье: {health(h)} · {RESOURCES[h['class']]}: {energy(h)} · восстановление за раунд: {2+gear_attribute(h,4)/20:g}\n\nХарактеристики\n"+
                      " · ".join(f"{n}: {v}" for n,v in zip(STAT_NAMES,stats(h)))+f"\nСмертей: {h.get('deaths',0)}"+diary,
                      ([[btn("Общее дело Гусзка","city")]]+([[btn("Грамоты походов","writ")]] if h.get("writs") or h.get("writ_news") or any(uid in lot["members"] for lot in s.get("writ_lots",{}).values()) else []) if op=="diary" else [])+[[btn(f"Навыки · {points(h)} очк.","nav:skills")],[btn("История и умение","bio:"+h["class"])]])
@@ -948,9 +947,6 @@ def play(s,uid,name,cmd):
         return reply(f"Класс выбран.\n{name} · {CLASSES[p[2]][0]}")
     if not h: return reply("Выбери класс в разделе «Герой».")
     mine = next((r for r in fights.values() if uid in r["party"]),None)
-    if op=="inn":
-        if mine:return board(s,mine,uid)
-        return tavern.card(h,p[1:])
     if op=="work":
         if p[1:]==["camp"]:
             return play(s,uid,name,"road") if h.get("coast_trip") else reply("Лагерь остался позади.")
@@ -959,7 +955,6 @@ def play(s,uid,name,cmd):
     if op in ("road","roadfight","craft"):
         if mine: return board(s,mine,uid)
         if op=="road":
-            if not p[1:] or h.get("coast_trip"):tavern.leave(h)
             returning=h.get("coast_trip",{}).get("returning")
             text,rows=road(h,p[1:])
             if returning and not h.get("coast_trip"):
@@ -971,7 +966,7 @@ def play(s,uid,name,cmd):
         z,n=min(((z,n) for z in range(len(ZONES)) for n in HUNT_IDS if faction(z,n) in ("robber","oath")),
                 key=lambda pair:abs(rank(*pair)-level(h)))
         key=secrets.token_hex(5)
-        fights[key]=dict(id=key,mode="hunt",z=z,choice=n,room=0,round=0,party=[uid],free_encounter=True,road_level=level(h))
+        fights[key]=dict(id=key,mode="hunt",z=z,choice=n,room=0,round=0,party=[uid],road_level=level(h))
         trip.pop("waiting")
         return play(s,uid,name,"go:"+key)
     if op=="skills": return training(h,uid)
@@ -987,13 +982,10 @@ def play(s,uid,name,cmd):
     if op=="city": return city.card(s,uid,p[1:],busy=bool(mine))
     if op=="orders":
         if mine and mine["round"]: return reply("Комендант ждёт тебя в городе после боя.")
-        tavern.leave(h)
         return desk(s,uid,p[1:])
     if op in ("town","shop"):
         if mine:return board(s,mine,uid)
-        tavern.leave(h)
         if op=="town":
-            h.pop("hunting_ground",None)
             h.pop("coast_trip",None)
             return market(h,uid,active=city.buff(s),needed=needs(s,uid))
         return trade(h,uid,p,city.buff(s),needs(s,uid))
@@ -1037,7 +1029,6 @@ def play(s,uid,name,cmd):
     if op in ("travel","journey") and len(p)==3 and p[1] in DIGITS and p[2] in ("0","1"):
         if mine:return board(s,mine,uid)
         z,half=int(p[1]),int(p[2])
-        tavern.leave(h)
         location=area_name(z,half)
         moved=h.get("hunting_ground")!=location or bool(h.get("coast_trip"))
         h.pop("coast_trip",None)
@@ -1046,7 +1037,7 @@ def play(s,uid,name,cmd):
             candidates=[n for n in HUNT_IDS if encounter_area(z,n)==location]
             enemy=random.choice(candidates)
             key=secrets.token_hex(5)
-            fights[key]=dict(id=key,mode="hunt",z=z,choice=enemy,room=0,round=0,party=[uid],free_encounter=True)
+            fights[key]=dict(id=key,mode="hunt",z=z,choice=enemy,room=0,round=0,party=[uid])
             text,rows=play(s,uid,name,"go:"+key)
             return reply(f"Случайная встреча · {location}\nПуть преграждает {monster(z,enemy)}.\n\n"+text,rows)
         text,_=area("zones",z,h,half)
@@ -1073,7 +1064,6 @@ def play(s,uid,name,cmd):
     if op in ("new","separate") and len(p)==4 and p[1] in ("hunt","raid","vault") and p[2] in DIGITS:
         if mine: return board(s,mine,uid)
         mode = p[1]
-        if tavern.balance(h)<tavern.COST[mode]:return reply(f"Для сбора нужно {tavern.COST[mode]} Бодрости. У тебя {h['vigor']}/100.",[[btn("В Гусзк","nav:town")]])
         if p[3] not in tuple(map(str,HUNT_IDS if mode=="hunt" else (0,1))): return reply("Выбери цель заново.")
         if mode=="vault" and (int(p[2]) not in VAULTS or p[3]!="0"): return reply("Выбери тайник в разделе «Тайники».")
         if op=="new" and mode!="vault":
@@ -1086,7 +1076,6 @@ def play(s,uid,name,cmd):
         key = secrets.token_hex(5)
         r = dict(id=key,mode=mode,z=int(p[2]),choice=int(p[3]),room=0,round=0,party=[uid])
         h.pop("coast_trip",None)
-        tavern.leave(h)
         fights[key] = r
         return board(s,r,uid)
     r = fights.get(p[1]) if len(p)>1 else None
@@ -1094,11 +1083,8 @@ def play(s,uid,name,cmd):
     if not r["round"]:
         if op=="join" and r["mode"]=="vault": return reply("Этот тайник рассчитан на одного героя.")
         if op=="join" and not mine:
-            cost=tavern.COST[r["mode"]]
-            if tavern.balance(h)<cost:return reply(f"Для вступления нужно {cost} Бодрости. У тебя {h['vigor']}/100.",[[btn("В Гусзк","nav:town")]])
             if len(r["party"])>=6: return reply("В отряде уже шесть героев.")
             h.pop("coast_trip",None)
-            tavern.leave(h)
             r["party"].append(uid)
         elif op=="join" and mine is r:
             return reply("Ты уже в отряде. Для начала нажми «Начать бой».",board(s,r,uid)[1])
@@ -1111,16 +1097,10 @@ def play(s,uid,name,cmd):
         if op=="go":
             if uid not in r["party"]: return reply("Сначала войди в отряд.")
             if r["mode"]=="raid" and len(r["party"])<2: return reply("В подземелье нужны хотя бы двое.")
-            cost=0 if r.get("free_encounter") or "road_level" in r else tavern.COST[r["mode"]]
-            for member in r["party"]:
-                if tavern.balance(heroes[member])<cost:return reply(f"{heroes[member]['name']}: для старта нужно {cost} Бодрости.",board(s,r,uid)[1])
             if r["mode"]=="vault" and not special_orders.permit(h,r["z"]):
                 zone_key = str(r["z"])
                 if h["keys"].get(zone_key,0)<1: return reply("Нужен ключ от этого тайника. Купи его у ключницы в городе.")
                 h["keys"][zone_key] -= 1
-            for member in r["party"]:
-                tavern.leave(heroes[member])
-                heroes[member]["vigor"]-=cost
             if r["mode"]=="raid":r["entry_levels"]=[level(heroes[i]) for i in r["party"]]
             hp = sum(health(heroes[i]) for i in r["party"])
             for member in r["party"]:
