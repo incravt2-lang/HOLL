@@ -139,6 +139,9 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
     mine = next((r for r in fights.values() if uid in r["party"]),None)
     hero = heroes.get(uid)
     event_art = None
+    if cmd=="town" and hero and not mine:
+        import tavern
+        tavern.leave(hero)
     encounter = pets.arrive(hero) if cmd=="town" and hero and not mine else None
     if encounter:
         pet, ticket = encounter
@@ -163,7 +166,12 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         rows = [[btn(label,"nav:"+dest) for label,dest in row] for row in MENU]
         msg += f"\n\n{alpha.RELEASE} · онлайн за 10 мин: {len(state.get('seen',{}))}"
 
-        if hero and hero.get("coast_trip") and not mine:
+        if hero:
+            import tavern
+            msg+=f"\nБодрость · {tavern.balance(hero)}/100"
+        if hero and "rest_since" in hero and not mine:
+            rows.insert(0,[btn("Вернуться в таверну","inn:look")])
+        elif hero and hero.get("coast_trip") and not mine:
             trip=hero["coast_trip"]
             label="К кострам лагеря" if trip["step"]==3 and not trip.get("returning") and not trip.get("waiting") else "Продолжить путь"
             rows.insert(0,[btn(label,"road")])
@@ -289,6 +297,7 @@ def fight_picture(fight):
 
 def screen_picture(command, hero):
     op, *args = command.split(":")
+    if op=="inn":return "tavern" if hero and "rest_since" in hero else "town"
     if op=="band" and args: return {"raid":"raid","vault":"vault","book":"book"}.get(args[0],"world")
     if op=="craft": return "coast_veya" if args[:1]==["veya"] else "coast_hariton"
     if op=="road": return "coast_road" if hero and hero.get("coast_trip") else "town"
@@ -567,7 +576,7 @@ def process(db, update, username):
                         card["text"]+="\n\nМесто · "+h["talk_label"]
                     art=card.get("art","")
                     party_view=room.startswith(("party/","vault/")) and (art.startswith(("room_","raid_","vault_","fork_")))
-                    public_view=(art=="town" or art=="coast_road" or party_view or
+                    public_view=(art in ("town","tavern") or art=="coast_road" or party_view or
                                  (room.startswith("hunt/") and (cmd.startswith(("travel:","journey:")) or art.startswith("beast_"))))
                     if public_view:
                         card["rows"]=social_rows(card["rows"],state,who,label,username)
