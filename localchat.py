@@ -48,6 +48,7 @@ def track(state):
             room=("vault/" if vault else "party/")+r["id"]
             place=VAULTS[r["z"]][0] if vault else ZONES[r["z"]][2][r["choice"]][0]
             label=place+(" · сбор" if not r["round"] else f" · зал {r.get('room',0)+1}/3")
+        elif "rest_since" in h and not r:room,label="tavern","Таверна Гусзка"
         elif trip:
             step=trip["step"]
             if trip.get("returning"):
