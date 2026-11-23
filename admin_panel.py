@@ -157,7 +157,7 @@ def render(db, actor, command):
         lo,hi=game.bounds(game.attack(h))
         text=[f"{name(uid)} · ID {uid}",f"{game.CLASSES[h['class']][0]} · ур. {game.level(h)} · опыт {h['xp']}",
               ("Онлайн" if online(uid) else "Офлайн")+" · "+activity,"Последняя активность · "+stamp(seen.get(uid)),
-              "",f"Удар {lo}–{hi} · крит {game.crit(h)}%",f"Макс. здоровье {game.health(h)} · запас энергии {game.energy(h)}",
+              "",f"Удар {lo}–{hi} · крит {game.crit(h)}%",f"Макс. здоровье {game.health(h)} · {game.RESOURCES[h['class']]} {game.energy(h)}",
               " · ".join(f"{n} {v}" for n,v in zip(game.STAT_NAMES,game.stats(h))),
               f"Смертей {h.get('deaths',0)} · медяков {h['wallet']} · вещей {len(h['items'])}"]
         if muted:text.append("Мут до "+stamp(until))

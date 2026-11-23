@@ -120,9 +120,6 @@ def market(h,uid,section="town",note="",active=None,needed=None):
             item=CODE_ITEMS[code]
             power=class_power(h["class"],item,strength(z,k))
             bonus=f"+{power} к удару" if gear_stat(z,k)==0 else f"+{power} к здоровью"
-            if item in ITEM_TRAITS:
-                idx,value=ITEM_TRAITS[item]
-                bonus+=f" · {STAT_NAMES[idx]} +{value}"
             bonus+=" · "+bonus_label(h,item)
             price=purchase(asking_price(z,k),section,active)
             text.append(f"\n{number}. {item}\n{price} мед.  ·  {tier_name(z,k)}  ·  ур. {wear_level(z,k)}\n{SLOTS[gear_slot(z,k)]} · {bonus}")

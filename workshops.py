@@ -154,9 +154,6 @@ def view(h,args,busy=False,reserved=None):
         band=BANDS[z];item=gear_names(z)[k]
         text=[item+" — "+item_slot_label(z,k),f"{tier_name(z,k)} · ур. {wear_level(z,k)} · навык {req}",
               f"+{class_power(h['class'],item,strength(z,k))} {'к удару' if gear_stat(z,k)==0 else 'ХП'} · "+bonus_label(h,item)]
-        if item in ITEM_TRAITS:
-            stat,value=ITEM_TRAITS[item]
-            text.append(f"{STAT_NAMES[stat]} +{value}")
         cost=ingredient_costs(stock,z,k)
         text+=["","Материалы"]
         for material,count in cost.items():

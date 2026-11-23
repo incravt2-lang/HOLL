@@ -425,6 +425,19 @@ def trade_banner(card,enabled):
         card["rows"].insert(0,[btn("Посмотреть обмен","nearby:inbox")])
         card["page"]=0
 
+def social_rows(rows,state,who,label,username,visible=True):
+    combat=next((r for r in state["fights"].values() if who in r["party"] and r.get("round",0)>0),None)
+    keep=[]
+    menus=[]
+    for row in rows:
+        clean=[b for b in row if b.get("callback_data") not in ("nearby","nav:nearby") and
+               not (b.get("url","").endswith("?startapp=chat"))]
+        if clean:
+            (menus if any(b.get("callback_data")=="nav:start" for b in clean) else keep).append(clean)
+    if visible and not (combat and len(combat["party"])==1):
+        keep.append([btn("Игроки рядом","nearby"),{"text":label,"url":f"https://t.me/{username}?startapp=chat"}])
+    return keep+menus
+
 def notify_trade(db,result,before,after,state,username):
     cards=[result,*result.get("others",[])]
     shown=set()
@@ -437,6 +450,9 @@ def notify_trade(db,result,before,after,state,username):
         row=db.execute("SELECT view FROM trade_screen WHERE uid=?",(who,)).fetchone()
         if row:
             card=json.loads(row[0])
+            had_social=any(b.get("callback_data") in ("nearby","nav:nearby") or b.get("url","").endswith("?startapp=chat") for line in card["rows"] for b in line)
+            label="Чат отряда" if state["heroes"][who].get("talk_room","").startswith("party/") else "Чат локации"
+            card["rows"]=social_rows(card["rows"],state,who,label,username,had_social)
         else:
             # Existing Alpha cards can receive an invitation before the recipient's first new action.
             slot="player:"+who
@@ -445,7 +461,7 @@ def notify_trade(db,result,before,after,state,username):
             h=state["heroes"][who]
             r=next((r for r in state["fights"].values() if who in r["party"]),None)
             text,rows=board(state,r,who) if r else (h["talk_label"],[])
-            rows=rows+[[btn("Игроки рядом","nearby")],[{"text":"Открыть чат","url":f"https://t.me/{username}?startapp=chat"}],[btn("☰ Меню","nav:start")]]
+            rows=social_rows(rows+[[btn("☰ Меню","nav:start")]],state,who,"Чат отряда" if r else "Чат локации",username)
             card=screen(db,old[0],who,h["name"],old[1],text,rows)
             card["art"]=fight_picture(r) if r else card.get("previous_art") or "gate"
 
@@ -553,13 +569,8 @@ def process(db, update, username):
                     party_view=room.startswith(("party/","vault/")) and (art.startswith(("room_","raid_","vault_","fork_")))
                     public_view=(art=="town" or art=="coast_road" or party_view or
                                  (room.startswith("hunt/") and (cmd.startswith(("travel:","journey:")) or art.startswith("beast_"))))
-                    if not public_view: continue
-                    menus=[row for row in card["rows"] if any(b.get("callback_data")=="nav:start" for b in row)]
-                    card["rows"]=[row for row in card["rows"] if row not in menus]
-                    if not any(b.get("callback_data") in ("nearby","nav:nearby") for row in card["rows"] for b in row):
-                        card["rows"].append([btn("Игроки рядом","nearby")])
-                    card["rows"].append([{"text":label,"url":f"https://t.me/{username}?startapp=chat"}])
-                    card["rows"].extend(menus)
+                    if public_view:
+                        card["rows"]=social_rows(card["rows"],state,who,label,username)
             notify_trade(db,result,before_offers,recipients(state),state,username)
         else:
             return

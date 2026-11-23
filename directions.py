@@ -29,5 +29,5 @@ def choose(h,cmd,busy=False):
         h["direction"]=key
         return "Направление · "+options[pick][0],[[{"text":"Продолжить","callback_data":"nav:resume"}]]
     text="Выбери направление · ур. 10\n\n"+"\n\n".join(name+"\n"+desc for name,desc in options)
-    text+="\n\nАктивный приём заменяет ход: 4 энергии, общая перезарядка с основным умением — через раунд. Первая смена вне боя бесплатна."
+    text+="\n\nАктивный приём заменяет ход: 6 ресурса (у Ученицы дополнительный приём — 7), общая перезарядка с основным умением — через раунд. Первая смена вне боя бесплатна."
     return text,[[button(name,("a","b")[i]+":"+str(current or "first"))] for i,(name,_) in enumerate(options)]

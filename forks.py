@@ -179,6 +179,8 @@ def choose(s,r,path):
         if e in ("accessory","gear"):
             coins=0
             pool=loot_slots(z,9 if r["mode"]=="vault" else 3+3*r["choice"],h["class"])
+            from world import old_origins
+            pool=[k for k in pool if (z,k) in old_origins]
             if e=="accessory":
                 pool=[k for k in pool if gear_slot(z,k) in (0,3,7)] or pool
                 tier=int(random.random()<0.2)

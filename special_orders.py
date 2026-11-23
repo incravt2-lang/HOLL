@@ -43,6 +43,30 @@ def record(h,r,n,xp):
     return "По поручению · "+found
 
 
+def training_bundle(h):
+    from workshops import BY_ID,RECIPES,gear_names,ingredient_costs
+    prof=h.get("profession") or {}
+    skill=prof.get("skill",0)
+    stock=h.get("supplies",{})
+    best=None
+    for key in prof.get("book",[]):
+        if key not in BY_ID:continue
+        z,k=BY_ID[key]
+        trade,deep,req=RECIPES[z,k]
+        item=gear_names(z)[k]
+        if trade!=prof.get("trade") or not req<=skill<min(30*(prof["rank"]+1),req+12) or item in h.get("items",{}):continue
+        costs=ingredient_costs(stock,z,k)
+        missing={a:v-stock.get(a,0) for a,v in costs.items() if v>stock.get(a,0)}
+        ordinary={a:v for a,v in missing.items() if a.startswith(("raw/","shop/"))}
+        give={}
+        for a,v in sorted(ordinary.items(),key=lambda entry:(entry[0].startswith("shop/"),entry[0])):
+            qty=min(4-sum(give.values()),v)
+            if qty:give[a]=qty
+        if not give:continue
+        score=(sum(missing.values())-sum(give.values()),-req,key)
+        if best is None or score<best[0]:best=(score,item,give)
+    return (best[1],best[2]) if best else ("",{})
+
 def view(h,args,reserved=None):
     from market import capacity,units
     from workshops import add
@@ -74,22 +98,25 @@ def view(h,args,reserved=None):
     active="special_order" in h
     ready=job["proof"] and all(job["counts"][i]==count for i,(_,_,count) in enumerate(goals))
     due=min(LIMITS[-1]-h["xp"],max(0,job["budget"]-job["earned"]))
-    if active and ready and len(args)==3 and args[0]=="claim" and args[1]==job["ticket"] and args[2] in ("forge","sew"):
-        if units(h,reserved)+4>capacity(h):return "Для набора нужны четыре свободных места. Поручение сохранено.",[back]
-        trade=args[2]
-        add(h,f"raw/{trade}.{(job['lv']-1)//10}",3)
-        add(h,f"shop/{trade}.0")
+    from workshops import name
+    item,give=training_bundle(h)
+    detail=", ".join(f"{name(a)} ×{v}" for a,v in give.items())
+    reward=f"Для изделия «{item}» · {detail}." if give else "Сейчас нет недостающих обычных материалов для знакомого рецепта с ростом навыка."
+    if active and ready and len(args)==3 and args[0]=="claim" and args[1]==job["ticket"] and args[2] in ("auto","forge","sew"):
+        if give and units(h,reserved)+sum(give.values())>capacity(h):
+            return "Освободи места в сумке: "+str(sum(give.values()))+". Поручение сохранено.",[back]
+        for a,v in give.items():add(h,a,v)
         h["xp"]+=due
         h["peak"]=max(h.get("peak",1),level(h))
         del h["special_order"]
-        return f"Комендант принял поручение. +{due} опыта. Получены три единицы сырья и расходник.",[back]
+        return f"Комендант принял поручение. +{due} опыта. "+reward,[back]
     lines=[title,story,"Охота"]
     for i,(area,n,count) in enumerate(goals):
         lines.append(f"{SCRAPS[area][n]} · {job['counts'][i]}/{count}\n{encounter_area(area,n)} → {monster(area,n)}")
     lines+=["Одиночный тайник",f"{VAULTS[z][0]} → {monster(z,11)} · ур. {rank(z,11)}\n{proof} · {int(job['proof'])}/1",
             f"Взнос · {job['price']} мед. · допуск включён\nОпыт за весь маршрут · {job['budget']}. Зачтено в бою · {job['earned']}.",
-            "Награда · три единицы сырья и расходник кузнеца или портного на выбор."]
+            "При сдаче · "+reward]
     rows=[]
     if not active:rows.append([btn(f"Принять · {job['price']} мед.","orders:special:take:"+job["ticket"])])
-    elif ready:rows.append([btn(label,"orders:special:claim:"+job["ticket"]+":"+trade) for trade,label in (("forge","Набор кузнеца"),("sew","Набор портного"))])
+    elif ready:rows.append([btn("Сдать и получить материалы" if give else "Сдать без материалов","orders:special:claim:"+job["ticket"]+":auto")])
     return "\n\n".join(lines),rows+[back]

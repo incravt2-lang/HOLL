@@ -778,3 +778,55 @@ def category(z,k):
         family=ARM_BY_NAME.get(gear_names(z)[k],(None,None))[1]
         return "Броня" if family in ("Щит","Баклер") else "Оружие"
     return "Аксессуары" if slot in (0,3,7,8) else "Броня"
+
+# Stand-test catalogue only. All existing item keys remain valid.
+from functools import lru_cache
+old_origins=dict(ORIGIN)
+old_loot=loot_slots
+reactivated={}
+targets={}
+for band in range(6):
+    for ci,cls in enumerate(("guard","nun","archer","smith","witch")):
+        candidates=[(p,x) for p,x in CLASS_PIECES.items() if p not in ORIGIN and BANDS[p[0]]==band and x[2]==cls]
+        for seq,(slot,source,tier) in enumerate([(7,"hunt",0),(7,"craft",1),(3,"quest",1),(14,"dungeon",2),(4,"hunt",0),(0,"deep",2),(1,"quest",1),(10,"craft",1),(15,"dungeon",3),(11,"deep",2)]):
+            options=[(p,x) for p,x in candidates if x[1]==slot and p not in ORIGIN]
+            if not options:continue
+            p,x=min(options,key=lambda px:(abs(px[1][3]-tier),px[0]))
+            z,k=p
+            ORIGIN[p]=source;RARITY[p]=tier;reactivated[p]=source
+            if source in ('craft','deep'):
+                trade='sew' if cls in ('nun','archer','witch') else 'forge'
+                RECIPES[p]=(trade,source=='deep',band*20+(15 if source=='deep' else 10))
+            if source=='hunt':targets[p]=HUNT_IDS[(ci+seq+band)%len(HUNT_IDS)]
+            if source=='dungeon':targets[p]=(5,8,11) [(ci+seq)%3] if z in VAULTS else (5,8)[(ci+seq)%2]
+@lru_cache(None)
+def loot_slots(z,n,cls=None):
+    return tuple(k for k in old_loot(z,n,cls) if (z,k) not in targets or targets[z,k]==n)
+
+# Final equipment values are keyed by the stable names already used in saves.
+import json
+from pathlib import Path
+
+GEAR_PROFILES=json.loads(Path(__file__).with_name("gear_profiles.json").read_text(encoding="utf-8"))
+STAT_NAMES=("Сила","Ловкость","Выносливость","Интеллект","Дух")
+RESOURCES=dict(guard="Стойкость",archer="Концентрация",smith="Заряд",nun="Вера",witch="Тонус")
+
+def strength(z,k):
+    return GEAR_PROFILES[NAMES[z][k]][0]
+
+def worn_bonus(h,item):
+    _,kind,value,*_=GEAR_PROFILES[item]
+    if value and item in ARM_BY_NAME and ARM_BY_NAME[item][0]!=h["class"]:
+        value=max(1,value//2)
+    return kind,value
+
+def bonus_label(h,item):
+    values=GEAR_PROFILES[item][3:]
+    parts=[f"{name} +{v}" for name,v in zip(STAT_NAMES,values) if v]
+    kind,v=worn_bonus(h,item)
+    if v:
+        label="запас ресурса" if kind=="reserve" else BONUS_NAMES[kind]
+        unit=" п.п." if kind in ("crit","severity") else ""
+        parts.append(f"{label} +{v}{unit}")
+    if item==SEAM_SHIELD:parts.append("после блока следующая Стена щитов даёт +4 защиты один раз за поход")
+    return " · ".join(parts)

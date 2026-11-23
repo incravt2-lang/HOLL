@@ -11,7 +11,7 @@ import haul
 import localchat
 from quests import SHIFT
 
-RELEASE = "Alpha 0.2.6"
+RELEASE = "Alpha 0.3.0"
 NAME = re.compile(r"[A-Z][a-z]{2,17}")
 RULE = "Имя героя · 3–18 английских букв. Первая заглавная, остальные строчные. Например, Aldric."
 
