@@ -1,6 +1,7 @@
 """Personal coastal journeys and commissions. Stored inside the campaign transaction."""
 import city
 import forks
+import special_orders
 import random
 import secrets
 import time
@@ -78,6 +79,11 @@ def journal(s,uid):
                 source=source_line(q["z"],q["n"])
                 lines.append(f"{label} · {progress(q,h)}/{q['need']}\n   {source}\nНаграда: {xp} опыта, {copper(q)} мед. и вещь · редкая {rare}%, иначе обычная.")
     if len(lines)==1: lines.append("Действующих поручений нет.")
+    job=h.get("special_order")
+    if job:
+        lines.extend(["\nОсобое поручение",*special_orders.objectives(job),special_orders.permit_label(job)])
+        if job["proof"] and all(qty>=goal[2] for qty,goal in zip(job["counts"],special_orders.ORDERS[job["kind"]][2])):
+            lines.append("Можно сдать коменданту.")
     q=city.current(s)
     lines.append("\nОбщее дело Гусзка\n"+city.PROJECTS[q["kind"]][0]+"\n"+city.summary(q))
     relic=h.get("route_relic")

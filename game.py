@@ -118,12 +118,21 @@ def reply(text, rows=()):
     return text, list(rows)
 
 def migrate(s):
-    if s.get("version")==13:return
+    if s.get("version")==14:return
+    if s.get("version")==13:
+        for r in s.get("fights",{}).values():
+            if r.get("mode")=="vault" and r.get("round"):
+                for uid in r["party"]:
+                    h=s["heroes"][uid]
+                    if special_orders.permit(h,r["z"]):
+                        h["special_order"]["permit_used"]=True
+        s["version"]=14
+        return
     if s.get("version")==12:
         for r in s.get("fights",{}).values():
             if r.get("round",0)>0:r["old_energy"]=True
         s["version"]=13
-        return
+        return migrate(s)
     from_previous=s.get("version")==11
     if s.get("version") not in (7,8,9,10,11): migrate_names(s)
     def refresh(items):
@@ -927,6 +936,11 @@ def play(s,uid,name,cmd):
         c = p[1]
         rows = [[btn("Выбрать этот класс",f"class:{uid}:{c}"),btn("Все классы","nav:hero")]] if not h else []
         return reply(f"{CLASSES[c][0]}\n\n{HISTORIES[c]}\n\n{CLASSES[c][1]} — {CLASSES[c][2]}.",rows)
+    if op=="tasks" and h:
+        rows=[[btn("Общее дело Гусзка","city")]]
+        if h.get("writs") or h.get("writ_news") or any(uid in lot["members"] for lot in s.get("writ_lots",{}).values()):
+            rows.append([btn("Грамоты походов","writ")])
+        return reply("Задания\n\n"+journal(s,uid),rows)
     if op in ("hero","diary"):
         if h is None:
             return reply("Выбери класс героя. Умения усиливаются с уровнем.\n"+
@@ -935,11 +949,10 @@ def play(s,uid,name,cmd):
         h["name"] = name
         lv = level(h)
         xp = "Достигнут предел уровней." if lv==60 else f"До уровня {lv+1}: {LIMITS[lv]-h['xp']} опыта."
-        diary="\n\n"+journal(s,uid) if op=="diary" else ""
         return reply(f"{CLASSES[h['class']][0]} · ур. {lv}/60\n{xp}\nБодрость · {tavern.balance(h)}/100\n\nВ бою\n"
                      f"Удар: {bounds(attack(h))[0]}–{bounds(attack(h))[1]} · крит: {crit(h)}% ×{multiplier(h)/100:.2f}\nЗдоровье: {health(h)} · {RESOURCES[h['class']]}: {energy(h)} · восстановление за раунд: {2+gear_attribute(h,4)/20:g}\n\nХарактеристики\n"+
-                     " · ".join(f"{n}: {v}" for n,v in zip(STAT_NAMES,stats(h)))+f"\nСмертей: {h.get('deaths',0)}"+diary,
-                     ([[btn("Общее дело Гусзка","city")]]+([[btn("Грамоты походов","writ")]] if h.get("writs") or h.get("writ_news") or any(uid in lot["members"] for lot in s.get("writ_lots",{}).values()) else []) if op=="diary" else [])+[[btn(f"Навыки · {points(h)} очк.","nav:skills")],[btn("История и умение","bio:"+h["class"])]])
+                     " · ".join(f"{n}: {v}" for n,v in zip(STAT_NAMES,stats(h)))+f"\nСмертей: {h.get('deaths',0)}",
+                     [[btn(f"Навыки · {points(h)} очк.","nav:skills")],[btn("История и умение","bio:"+h["class"])]])
     if op=="class" and len(p)==3 and p[2] in CLASSES:
         if uid!=p[1]: return reply("Это чужой лист героя.")
         if h: return reply("Твой герой уже выбрал класс.")
@@ -954,7 +967,7 @@ def play(s,uid,name,cmd):
     if op=="work":
         if p[1:]==["camp"]:
             return play(s,uid,name,"road") if h.get("coast_trip") else reply("Лагерь остался позади.")
-        if p[1:]==["hero"]:return reply("Герой",[[btn("Лист персонажа","nav:diary"),btn("Сумка","nav:bag")]])
+        if p[1:]==["hero"]:return reply("Герой",[[btn("Лист персонажа","nav:diary"),btn("Сумка","nav:bag")],[btn("Задания","nav:tasks")]])
         return workshops.view(h,p[1:],bool(mine),needs(s,uid))
     if op in ("road","roadfight","craft"):
         if mine: return board(s,mine,uid)
@@ -1114,7 +1127,9 @@ def play(s,uid,name,cmd):
             cost=0 if r.get("free_encounter") or "road_level" in r else tavern.COST[r["mode"]]
             for member in r["party"]:
                 if tavern.balance(heroes[member])<cost:return reply(f"{heroes[member]['name']}: для старта нужно {cost} Бодрости.",board(s,r,uid)[1])
-            if r["mode"]=="vault" and not special_orders.permit(h,r["z"]):
+            if r["mode"]=="vault" and special_orders.permit(h,r["z"]):
+                h["special_order"]["permit_used"]=True
+            elif r["mode"]=="vault":
                 zone_key = str(r["z"])
                 if h["keys"].get(zone_key,0)<1: return reply("Нужен ключ от этого тайника. Купи его у ключницы в городе.")
                 h["keys"][zone_key] -= 1

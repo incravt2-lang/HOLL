@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 
 from world import HUNT_IDS, ZONES, area_name
-from market import POTIONS, SCROLLS
+from market import POTIONS, SCROLLS, market
 from game import return_route, CLASSES, TITLE, btn, play, board, level, migrate, title, target
 
 COMMANDS = {"town":"Город и торговцы","vault":"Редкие одиночные подземелья","zones":"Карта уровней","book":"Бестиарий и добыча","hunt":"Одиночная или совместная охота","start":"Меню свободной игры","hero":"Лист героя и выбор класса",
@@ -46,6 +46,8 @@ def packed_art():
     return zipfile.Path(archive) if archive.is_file() else None
 
 def picture_file(art):
+    if art=="tavern_hall":
+        art="tavern"
     name=art if art.endswith(".mp4") else art+".jpg"
     local=ART_DIR/name
     pack=packed_art()
@@ -187,7 +189,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
         if mine: rows.insert(0,[btn("Вернуться в поход","nav:current")])
     elif cmd=="hero" and hero:
         msg=f"{CLASSES[hero['class']][0]} · ур. {level(hero)}"
-        rows=[[btn("Лист персонажа","nav:diary"),btn("Сумка","nav:bag")]]
+        rows=[[btn("Лист персонажа","nav:diary"),btn("Сумка","nav:bag")],[btn("Задания","nav:tasks")]]
         if hero.get("profession"):
             trade=hero["profession"]["trade"]
             rows.append([btn("Кузнечное дело" if trade=="forge" else "Портняжное дело","work:"+trade)])
@@ -231,7 +233,7 @@ def player_action(db,state,chat,uid,name,topic,cmd,cb):
             watches.pop(uid,None)
     result_rows=list(rows) if ended else []
     menu = [btn("☰ Меню","nav:start")]
-    if op in ("diary","bag") and hero:
+    if op in ("diary","bag","tasks") and hero:
         rows=rows+[[btn("‹ Герой","nav:hero")]]
     if cmd in ("lore","book","help"):
         menu.insert(0,btn("‹ Кодекс","nav:codex"))
@@ -297,7 +299,7 @@ def fight_picture(fight):
 
 def screen_picture(command, hero):
     op, *args = command.split(":")
-    if op=="inn":return "tavern" if hero and "rest_since" in hero else "town"
+    if op=="inn":return "tavern_hall" if hero and "rest_since" in hero else "town"
     if op=="band" and args: return {"raid":"raid","vault":"vault","book":"book"}.get(args[0],"world")
     if op=="craft": return "coast_veya" if args[:1]==["veya"] else "coast_hariton"
     if op=="road": return "coast_road" if hero and hero.get("coast_trip") else "town"
@@ -306,7 +308,7 @@ def screen_picture(command, hero):
     if op=="dungeons": return "raid"
     if op == "bio" and args:
         return "hero_" + args[0]
-    if op in ("hero", "diary", "class", "skills", "train") or (not hero and op not in ("start","help","lore")):
+    if op in ("hero", "diary", "tasks", "class", "skills", "train") or (not hero and op not in ("start","help","lore")):
         return "hero_" + hero["class"] if hero else "teams"
     if op == "report":
         return hero.get("report_art","teams") if hero else "teams"
@@ -576,7 +578,7 @@ def process(db, update, username):
                         card["text"]+="\n\nМесто · "+h["talk_label"]
                     art=card.get("art","")
                     party_view=room.startswith(("party/","vault/")) and (art.startswith(("room_","raid_","vault_","fork_")))
-                    public_view=(art in ("town","tavern") or art=="coast_road" or party_view or
+                    public_view=(art in ("town","tavern_hall") or art=="coast_road" or party_view or
                                  (room.startswith("hunt/") and (cmd.startswith(("travel:","journey:")) or art.startswith("beast_"))))
                     if public_view:
                         card["rows"]=social_rows(card["rows"],state,who,label,username)
@@ -713,8 +715,37 @@ def remember_card(db,r,message):
     db.execute("INSERT OR REPLACE INTO cards VALUES (?,?,?,?)",(r["chat"],slot,message,r["thread"] or 0))
     if slot.startswith("player:"):
         view={k:r[k] for k in ("chat","slot","thread","text","rows","art","page") if k in r}
+        if view.get("art")=="armourer":
+            # Even a sold-out shelf follows the same hourly schedule.
+            periods=[b["callback_data"].split(":stock-")[1].split("-")[0]
+                     for line in view["rows"] for b in line if ":stock-" in b.get("callback_data","")]
+            view["stock_hour"]=int(periods[0]) if periods else int(time.time())//3600
         view.update(target=message,previous_art=r.get("art"),notice=False)
         db.execute("INSERT OR REPLACE INTO trade_screen VALUES(?,?)",(slot[7:],json.dumps(view)))
+
+def refresh_armourer(db,hour):
+    listings=db.execute("""SELECT uid,view FROM trade_screen
+        WHERE json_extract(view,'$.art')='armourer'
+        AND coalesce(json_extract(view,'$.stock_hour'),-1)<?""",(hour,)).fetchall()
+    if not listings:return
+    state=alpha.load(db)
+    for uid,encoded in listings:
+        view=json.loads(encoded)
+        hero=state["heroes"].get(uid)
+        if not hero:continue
+        current=db.execute("SELECT message FROM cards WHERE chat=? AND slot=?",(view["chat"],view["slot"])).fetchone()
+        if not current or current[0]!=view["target"]:continue
+        text,rows=market(hero,uid,"armourer","Ассортимент поменялся. Прибыл новый обоз.",city.buff(state))
+        view.update(text="🎲 "+hero["name"]+"\n"+text,rows=rows+[[btn("☰ Меню","nav:start")]],page=0,edit_only=True)
+        trade_banner(view,uid in recipients(state))
+        try:
+            message=deliver_card(view)
+        except ApiError as exc:
+            if exc.code not in (400,403):raise
+            # Drop only the obsolete watch; the current Telegram card can still be reopened.
+            with db:db.execute("DELETE FROM trade_screen WHERE uid=? AND view=?",(uid,encoded))
+            continue
+        with db:remember_card(db,view,message)
 
 def sync_profile(db,identity):
     settings = {"setMyName":{"name":TITLE},
@@ -764,6 +795,7 @@ def main():
     localchat.serve(database,TOKEN)
     print(f"Мёртвая мера · {alpha.RELEASE} · общий мир",flush=True)
     next_prune = 0
+    refreshed_hour = None
     next_profile = 0
     username = None
     while True:
@@ -777,6 +809,10 @@ def main():
                 print("У ворот дежурит @"+username,flush=True)
             if time.time()>=next_profile:
                 next_profile = sync_profile(db,identity)
+            hour=int(time.time())//3600
+            if hour!=refreshed_hour:
+                refresh_armourer(db,hour)
+                refreshed_hour=hour
             options = {"offset":offset} if offset is not None else {}
             updates = api("getUpdates",timeout=25,allowed_updates=["message","callback_query"],**options)
             if not updates and offset is not None:
